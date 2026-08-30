@@ -38,17 +38,52 @@ if (!PROVIDER_API_KEY) {
   console.warn('PROVIDER_API_KEY is not configured. Provider-backed routes will return configuration errors until it is set.');
 }
 
-if (!admin.apps.length) {
-  let credential;
-  if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
-    const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON.trim();
-    const serviceAccount = JSON.parse(raw);
-    credential = admin.credential.cert(serviceAccount);
-  } else if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
-    credential = admin.credential.applicationDefault();
-  } else {
-    credential = admin.credential.applicationDefault();
+function loadFirebaseCredential() {
+  const jsonValue = String(process.env.FIREBASE_SERVICE_ACCOUNT_JSON || '').trim();
+
+  if (jsonValue) {
+    try {
+      const serviceAccount = JSON.parse(jsonValue);
+      if (!serviceAccount.project_id || !serviceAccount.client_email || !serviceAccount.private_key) {
+        throw new Error('FIREBASE_SERVICE_ACCOUNT_JSON is missing project_id, client_email, or private_key.');
+      }
+      serviceAccount.private_key = String(serviceAccount.private_key).replace(/\\n/g, '\n');
+      return admin.credential.cert(serviceAccount);
+    } catch (error) {
+      throw new Error(`Invalid FIREBASE_SERVICE_ACCOUNT_JSON: ${error.message}`);
+    }
   }
+
+  const projectId = String(
+    process.env.FIREBASE_PROJECT_ID || process.env.GCP_PROJECT_ID || ''
+  ).trim();
+  const clientEmail = String(
+    process.env.FIREBASE_CLIENT_EMAIL || process.env.GCP_CLIENT_EMAIL || ''
+  ).trim();
+  const privateKey = String(
+    process.env.FIREBASE_PRIVATE_KEY || process.env.GCP_PRIVATE_KEY || ''
+  ).replace(/\\n/g, '\n').trim();
+
+  if (projectId && clientEmail && privateKey) {
+    return admin.credential.cert({
+      projectId,
+      clientEmail,
+      privateKey
+    });
+  }
+
+  if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+    return admin.credential.applicationDefault();
+  }
+
+  throw new Error(
+    'Firebase Admin credentials are missing. Set FIREBASE_SERVICE_ACCOUNT_JSON on Railway, ' +
+    'or set FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL and FIREBASE_PRIVATE_KEY.'
+  );
+}
+
+if (!admin.apps.length) {
+  const credential = loadFirebaseCredential();
 
   admin.initializeApp({
     credential,
