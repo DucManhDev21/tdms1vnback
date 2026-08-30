@@ -1,0 +1,19 @@
+{
+  "name": "tdms1vn-backend",
+  "version": "1.0.0",
+  "description": "TDMS1VN Backend API",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.6.1",
+    "express": "^5.1.0",
+    "firebase-admin": "^13.4.0",
+    "node-cron": "^4.2.1"
+  }
+}
