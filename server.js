@@ -8,11 +8,11 @@ const rateLimit = require('express-rate-limit');
 const admin = require('firebase-admin');
 
 const path = require('path');
-const servicesRouter = require('./backend/services');
-const orderRouter = require('./backend/order');
-const cronModule = require('./backend/cron');
+const servicesRouter = require('./services');
+const orderRouter = require('./order');
+const cronModule = require('./cron');
 const cronRouter = cronModule;
-const depositRouter = require('./backend/deposit');
+const depositRouter = require('./deposit');
 
 const app = express();
 const PORT = Number(process.env.PORT || 8080);
@@ -49,7 +49,7 @@ app.use(helmet({
 }));
 app.use(cors({
   origin: (origin, callback) => {
-    const allowed = (process.env.CORS_ORIGINS || '').split(',').map(v => v.trim()).filter(Boolean);
+    const allowed = (process.env.CORS_ORIGINS || 'https://tdms1vn.vercel.app').split(',').map(v => v.trim()).filter(Boolean);
     if (!origin || allowed.length === 0 || allowed.includes('*') || allowed.includes(origin)) {
       return callback(null, true);
     }
