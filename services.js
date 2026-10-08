@@ -116,6 +116,7 @@ async function getServices(forceRefresh = false, db = null) {
       }
       const fresh = freshBase
         .map(service => applyPricing(service, overrides.get(String(service.service))))
+        .filter(Boolean)
         .filter(service => service.enabled);
       cachedServices = fresh;
       cachedAt = Date.now();

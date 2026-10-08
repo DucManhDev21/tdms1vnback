@@ -32,8 +32,14 @@ async function getPricingOverrides(db) {
 }
 
 function applyPricing(service, override = null) {
+  if (!service) return null;
   const providerUnitRate = Number(service.unitRateVnd ?? service.rate);
-  if (!Number.isFinite(providerUnitRate) || providerUnitRate < 0) throw new Error(`Invalid provider rate for service ${service.service}`);
+  
+  // Trả về null để lọc bỏ dịch vụ lỗi giá thay vì throw Error gây crash hệ thống
+  if (!Number.isFinite(providerUnitRate) || providerUnitRate < 0) {
+    return null;
+  }
+
   const markupPercent = parseMarkup(override?.markupPercent, defaultMarkupPercent());
   const customRate = override?.fixedUnitRateVnd;
   const sellingRate = customRate != null && Number.isFinite(Number(customRate)) && Number(customRate) >= 0
