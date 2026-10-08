@@ -1,14 +1,12 @@
 const express = require('express');
-const axios = require('axios');
+const { providerAddOrder } = require('./provider');
 const crypto = require('crypto');
 const router = express.Router();
 const { getServices } = require('./services');
+const { calculateTotal, roundMoney } = require('./pricing');
 
-function providerClient() {
-  const baseURL = process.env.PROVIDER_API_URL;
-  const key = process.env.PROVIDER_API_KEY;
-  if (!baseURL || !key) throw new Error('Provider API is not configured');
-  return axios.create({ baseURL, timeout: Number(process.env.PROVIDER_TIMEOUT_MS || 20000) });
+function requireUser(req, res, next) {
+  return req.app.locals.verifyToken(req, res, next);
 }
 
 function requestId(req) {
@@ -30,61 +28,16 @@ function normalizeProviderStatus(value) {
 }
 
 async function createProviderOrder({ serviceId, link, quantity }) {
-  const client = providerClient();
-  const body = new URLSearchParams({
-    key: process.env.PROVIDER_API_KEY,
-    action: 'add',
-    service: String(serviceId),
-    link,
-    quantity: String(quantity)
-  });
-  const response = await client.post('', body.toString(), {
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
-  });
-  const providerOrderId = parseProviderOrderId(response.data);
+  const data = await providerAddOrder({ service: serviceId, link, quantity });
+  const providerOrderId = parseProviderOrderId(data);
   if (!providerOrderId) {
-    const message = response.data?.error || response.data?.message || 'Provider did not return an order id';
+    const message = data?.error || data?.message || 'Provider không trả về mã đơn hàng';
     throw new Error(String(message));
   }
   return providerOrderId;
 }
 
-async function refundCanceledOrder(db, admin, orderId, reason) {
-  const orderRef = db.collection('orders').doc(orderId);
-  await db.runTransaction(async tx => {
-    const snap = await tx.get(orderRef);
-    if (!snap.exists) throw new Error('Order not found during refund');
-    const order = snap.data();
-    if (order.refundedAt) return;
-    const userRef = db.collection('users').doc(order.uid);
-    const userSnap = await tx.get(userRef);
-    const user = userSnap.exists ? userSnap.data() : { balance: 0 };
-    const oldBalance = Number(user.balance || 0);
-    const refund = Number(order.totalPrice || 0);
-    const newBalance = oldBalance + refund;
-    tx.update(userRef, { balance: newBalance });
-    tx.update(orderRef, {
-      status: 'Canceled',
-      remains: Number(order.quantity || 0),
-      refundedAt: admin.firestore.FieldValue.serverTimestamp(),
-      refundAmount: refund,
-      cancelReason: reason
-    });
-    const logRef = db.collection('balance_logs').doc();
-    tx.set(logRef, {
-      uid: order.uid,
-      amount: refund,
-      type: 'credit',
-      reason: `Hoàn tiền đơn ${orderId}: ${reason}`,
-      oldBalance,
-      newBalance,
-      orderId,
-      createdAt: admin.firestore.FieldValue.serverTimestamp()
-    });
-  });
-}
-
-router.post('/', async (req, res) => {
+router.post('/', requireUser, async (req, res) => {
   const db = req.app.locals.db;
   const admin = req.app.locals.admin;
   const uid = req.user.uid;
@@ -99,7 +52,7 @@ router.post('/', async (req, res) => {
   if (String(link).length > 2000) return res.status(400).json({ error: 'Link quá dài' });
 
   try {
-    const services = await getServices(false);
+    const services = await getServices(false, db);
     const service = services.find(v => v.service === parsedServiceId);
     if (!service) return res.status(400).json({ error: 'Dịch vụ không tồn tại' });
     const min = Number.parseInt(service.min, 10);
@@ -107,8 +60,9 @@ router.post('/', async (req, res) => {
     if (parsedQuantity < min || parsedQuantity > max) {
       return res.status(400).json({ error: `Số lượng phải từ ${min} đến ${max}` });
     }
-    const rate = Number.parseFloat(service.rate);
-    const totalPrice = parsedQuantity * rate;
+    const rate = Number.parseFloat(service.unitRateVnd ?? service.rate);
+    if (!Number.isFinite(rate) || rate < 0) return res.status(400).json({ error: 'Giá dịch vụ không hợp lệ' });
+    const totalPrice = calculateTotal(rate, parsedQuantity);
     if (!Number.isFinite(totalPrice) || totalPrice < 0) return res.status(400).json({ error: 'Giá dịch vụ không hợp lệ' });
 
     const idemRef = db.collection('order_requests').doc(`${uid}_${idem.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 80)}`);
@@ -130,6 +84,8 @@ router.post('/', async (req, res) => {
       tx.update(userRef, { balance: newBalance });
       tx.set(orderRef, {
         uid,
+        username: String(user.username || ''),
+        email: String(user.email || req.user.email || ''),
         serviceId: parsedServiceId,
         serviceName: service.name,
         platform: service.platform,
@@ -139,8 +95,16 @@ router.post('/', async (req, res) => {
         quantity: parsedQuantity,
         totalPrice,
         rate,
+        unitRateVnd: rate,
+        providerRate: service.providerRate ?? null,
+        providerRateMode: service.providerRateMode ?? null,
+        providerUnitRateVnd: service.providerUnitRateVnd ?? service.providerRate ?? null,
+        sellingRateVnd: service.sellingRateVnd ?? rate,
+        markupPercent: service.markupPercent ?? 0,
+        fixedUnitRateVnd: service.fixedUnitRateVnd ?? null,
         providerOrderId: '',
-        status: 'Pending',
+        status: 'AwaitingProvider',
+        providerCallStartedAt: admin.firestore.FieldValue.serverTimestamp(),
         remains: parsedQuantity,
         refill: service.refill,
         cancel: service.cancel,
@@ -171,10 +135,25 @@ router.post('/', async (req, res) => {
 
     try {
       const providerOrderId = await createProviderOrder({ serviceId: parsedServiceId, link: String(link).trim(), quantity: parsedQuantity });
-      await db.collection('orders').doc(result.orderId).update({ providerOrderId, status: 'Pending', updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+      await db.collection('orders').doc(result.orderId).update({ providerOrderId, status: 'Pending', providerCallCompletedAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() });
       return res.status(201).json({ ok: true, orderId: result.orderId, providerOrderId, totalPrice });
     } catch (providerError) {
-      await refundCanceledOrder(db, admin, result.orderId, providerError.message || 'Provider error');
+      const orderRef = db.collection('orders').doc(result.orderId);
+      await db.runTransaction(async tx => {
+        const orderSnap = await tx.get(orderRef);
+        if (!orderSnap.exists || orderSnap.data()?.refundSettledAt) return;
+        const order = orderSnap.data() || {};
+        const userRef = db.collection('users').doc(uid);
+        const userSnap = await tx.get(userRef);
+        if (!userSnap.exists) throw new Error('Không tìm thấy tài khoản để hoàn tiền');
+        const oldBalance = Number(userSnap.data()?.balance || 0);
+        const refund = roundMoney(Number(order.totalPrice || 0));
+        const newBalance = roundMoney(oldBalance + refund);
+        tx.update(userRef, { balance: newBalance, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+        tx.update(orderRef, { status: 'Canceled', remains: Number(order.quantity || 0), providerError: true, refundAmount: refund, refundSettledAt: admin.firestore.FieldValue.serverTimestamp(), cancelReason: String(providerError.message || 'Provider error').slice(0, 500), updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+        const logRef = db.collection('balance_logs').doc();
+        tx.set(logRef, { uid, amount: refund, type: 'credit', reason: `Hoàn tiền đơn ${result.orderId}: Provider error`, oldBalance, newBalance, orderId: result.orderId, createdAt: admin.firestore.FieldValue.serverTimestamp() });
+      });
       return res.status(502).json({ error: 'Provider lỗi, hệ thống đã hoàn tiền 100%', refunded: true, orderId: result.orderId });
     }
   } catch (error) {
@@ -185,12 +164,16 @@ router.post('/', async (req, res) => {
   }
 });
 
-router.get('/', async (req, res) => {
+router.get('/', requireUser, async (req, res) => {
   const db = req.app.locals.db;
   const uid = req.user.uid;
   try {
-    const snap = await db.collection('orders').where('uid', '==', uid).orderBy('createdAt', 'desc').limit(100).get();
-    const orders = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    const snap = await db.collection('orders').where('uid', '==', uid).limit(100).get();
+    const orders = snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a, b) => {
+      const ta = a.createdAt?.toMillis ? a.createdAt.toMillis() : new Date(a.createdAt || 0).getTime();
+      const tb = b.createdAt?.toMillis ? b.createdAt.toMillis() : new Date(b.createdAt || 0).getTime();
+      return tb - ta;
+    });
     res.json({ orders });
   } catch (error) {
     console.error('orders list:', error);
