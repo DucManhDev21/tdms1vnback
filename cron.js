@@ -11,8 +11,11 @@ const LOCK_TTL_MS = Math.min(Math.max(Number(process.env.SYNC_LOCK_TTL_MS || 10 
 function cronGuard(req, res, next) {
   const secret = String(process.env.CRON_SECRET || '').trim();
   if (!secret) return res.status(503).json({ error: 'CRON_SECRET not configured' });
-  const supplied = String(req.get('X-Cron-Secret') || req.query.secret || '').trim();
-  if (!supplied || supplied !== secret) return res.status(401).json({ error: 'Invalid cron secret' });
+  const supplied = String(req.get('X-Cron-Secret') || '').trim();
+  const a = Buffer.from(supplied);
+  const b = Buffer.from(secret);
+  const ok = a.length === b.length && crypto.timingSafeEqual(a, b);
+  if (!ok) return res.status(401).json({ error: 'Invalid cron secret' });
   next();
 }
 

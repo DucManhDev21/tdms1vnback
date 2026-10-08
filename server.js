@@ -720,20 +720,9 @@ app.use('/api', (req, res) => res.status(404).json({ error: 'API endpoint not fo
 app.use((req, res) => res.status(404).json({ error: 'Not found' }));
 
 app.use((error, req, res, next) => {
-  console.error('Unhandled server error:', error);
+  console.error('Unhandled server error:', typeof errorInfo === 'function' ? errorInfo(error) : error);
   if (res.headersSent) return next(error);
   res.status(500).json({ error: 'Internal server error' });
-});
-
-app.use((req, res) => {
-  if (req.path.startsWith('/api/')) return res.status(404).json({ ok:false, error:'API endpoint không tồn tại', path:req.path });
-  return res.status(404).json({ ok:false, error:'Not found' });
-});
-
-app.use((error, req, res, next) => {
-  console.error('unhandled express error:', errorInfo(error));
-  if (res.headersSent) return next(error);
-  return res.status(500).json({ ok:false, error:'Internal server error' });
 });
 
 if (require.main === module) {
