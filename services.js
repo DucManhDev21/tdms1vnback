@@ -24,7 +24,6 @@ function toBool(value) {
   return ['1', 'true', 'yes', 'y', 'on'].includes(String(value).toLowerCase());
 }
 
-// Hàm chuẩn hóa an toàn tuyệt đối, không bao giờ văng Exception
 function normalizeService(row) {
   try {
     if (!row || typeof row !== 'object') return null;
@@ -81,6 +80,7 @@ function normalizeService(row) {
   }
 }
 
+// ĐÃ SỬA: Bọc lót an toàn, trả về mảng rỗng [] thay vì throw Error làm sập Cron Job
 async function fetchProviderServices() {
   try {
     const data = await providerServices();
@@ -137,6 +137,7 @@ async function getServices(forceRefresh = false, db = null) {
         return fresh;
       }
       
+      // Nếu Provider bị lỗi/rỗng, tự động lấy dữ liệu lưu tạm từ Firestore Catalog
       return await loadCatalogFallback(db);
     } catch (error) {
       return await loadCatalogFallback(db);
@@ -160,6 +161,14 @@ async function loadCatalogFallback(db) {
     return rows;
   } catch {
     return cachedServices || [];
+  }
+}
+
+async function syncServices(db, forceRefresh = true) {
+  try {
+    return await getServices(forceRefresh, db);
+  } catch (error) {
+    return await loadCatalogFallback(db);
   }
 }
 
@@ -199,3 +208,7 @@ router.get('/:serviceId', async (req, res) => {
 });
 
 module.exports = router;
+module.exports.getServices = getServices;
+module.exports.syncServices = syncServices;
+module.exports.loadCatalogFallback = loadCatalogFallback;
+module.exports.normalizeService = normalizeService;
