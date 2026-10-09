@@ -85,6 +85,14 @@ function parseApprove(text) {
   return { depositId, customAmount };
 }
 
+function parseReject(text) {
+  const p = String(text || '').trim().split(/\s+/);
+  if (p.length < 2) throw new Error('Cú pháp: /reject depositId [Lý_do]');
+  const depositId = p[1].trim();
+  const reason = p.slice(2).join(' ').trim() || 'Admin từ chối yêu cầu';
+  return { depositId, reason };
+}
+
 function parseTake(text) {
   const p = String(text || '').trim().split(/\s+/);
   if (p.length !== 3) throw new Error('Cú pháp: /take username số_tiền');
@@ -156,14 +164,16 @@ async function findUserByUsername(db, username) {
   throw new Error(`Không tìm thấy username @${username}.`);
 }
 
-// Lệnh Duyệt Đơn Theo ID Đơn (Chuẩn xác 100%)
+// Duyệt Đơn Theo ID -> Trạng thái: "Thành công"
 async function approveDeposit(db, admin, depositId, customAmount) {
   const depositRef = db.collection('deposits').doc(depositId);
   const depositSnap = await depositRef.get();
   if (!depositSnap.exists) throw new Error(`Không tìm thấy đơn nạp ID: ${depositId}`);
 
   const depositData = depositSnap.data() || {};
-  if (depositData.status === 'Đã duyệt') throw new Error(`Đơn nạp ID ${depositId} đã được duyệt trước đó.`);
+  if (depositData.status === 'Thành công' || depositData.status === 'Đã duyệt') {
+    throw new Error(`Đơn nạp ID ${depositId} đã thành công trước đó.`);
+  }
 
   const uid = depositData.uid;
   if (!uid) throw new Error('Đơn nạp thiếu thông tin UID người dùng.');
@@ -180,9 +190,9 @@ async function approveDeposit(db, admin, depositId, customAmount) {
     const oldBalance = Math.round(rawBalance * 100) / 100;
     const newBalance = Math.round((oldBalance + amountToCredit) * 100) / 100;
 
-    // 1. Cập nhật trạng thái đơn nạp
+    // 1. Cập nhật trạng thái đơn nạp thành "Thành công"
     tx.update(depositRef, {
-      status: 'Đã duyệt',
+      status: 'Thành công',
       approvedAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp()
     });
@@ -212,6 +222,33 @@ async function approveDeposit(db, admin, depositId, customAmount) {
       amount: amountToCredit 
     };
   });
+}
+
+// Từ chối Đơn Theo ID -> Trạng thái: "Thất bại"
+async function rejectDeposit(db, admin, depositId, reason) {
+  const depositRef = db.collection('deposits').doc(depositId);
+  const depositSnap = await depositRef.get();
+  if (!depositSnap.exists) throw new Error(`Không tìm thấy đơn nạp ID: ${depositId}`);
+
+  const depositData = depositSnap.data() || {};
+  if (depositData.status === 'Thành công' || depositData.status === 'Đã duyệt') {
+    throw new Error(`Đơn nạp ID ${depositId} đã duyệt thành công, không thể từ chối.`);
+  }
+
+  await depositRef.update({
+    status: 'Thất bại',
+    rejectReason: reason,
+    rejectedAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp()
+  });
+
+  return {
+    depositId,
+    email: String(depositData.email || '—'),
+    username: String(depositData.username || '—'),
+    amount: Number(depositData.amount || 0),
+    reason
+  };
 }
 
 async function pay(db, admin, username, amount) {
@@ -275,7 +312,7 @@ async function deletePopup(db,id) {
 }
 
 async function sendHelp(chatId) {
-  return telegram('sendMessage',{chat_id:chatId,text:'<b>TDMS1VN V10 ADMIN BOT</b>\n\n/approve ID_ĐƠN [Số_tiền]\n/pay username số_tiền\n/take username số_tiền\n/syncorders\n/syncservices\n/stats\n/addpopup ID | Tiêu đề | Nội dung\n/deletepopup ID\n/addadmin email@gmail.com\n/deleteadmin email@gmail.com\n/listadmin\n/help\n\nVí dụ:\n/approve abc123xyz\n/pay hung123 50000\n/take hung123 50000',parse_mode:'HTML'});
+  return telegram('sendMessage',{chat_id:chatId,text:'<b>TDMS1VN V10 ADMIN BOT</b>\n\n/approve ID_ĐƠN [Số_tiền]\n/reject ID_ĐƠN [Lý_do]\n/pay username số_tiền\n/take username số_tiền\n/syncorders\n/syncservices\n/stats\n/addpopup ID | Tiêu đề | Nội dung\n/deletepopup ID\n/addadmin email@gmail.com\n/deleteadmin email@gmail.com\n/listadmin\n/help\n\nVí dụ:\n/approve abc123xyz\n/reject abc123xyz Thẻ sai seri\n/pay hung123 50000',parse_mode:'HTML'});
 }
 
 async function handleMessage(message,db,admin) {
@@ -296,7 +333,12 @@ async function handleMessage(message,db,admin) {
   if(command==='/approve'){
     const {depositId, customAmount}=parseApprove(text);
     const r=await approveDeposit(db,admin,depositId,customAmount);
-    return telegram('sendMessage',{chat_id:chatId,text:`✅ <b>DUYỆT ĐƠN NẠP THÀNH CÔNG</b>\n\n🆔 Mã đơn: <code>${esc(r.depositId)}</code>\n👤 Username: <code>@${esc(r.username)}</code>\n📧 Gmail: <code>${esc(r.email||'—')}</code>\n💰 Cộng: <b>${money(r.amount)}</b>\n💳 Số dư cũ: ${money(r.oldBalance)}\n💳 Số dư mới: <b>${money(r.newBalance)}</b>`,parse_mode:'HTML'});
+    return telegram('sendMessage',{chat_id:chatId,text:`✅ <b>DUYỆT ĐƠN NẠP THÀNH CÔNG</b>\n\n🆔 Mã đơn: <code>${esc(r.depositId)}</code>\n👤 Username: <code>@${esc(r.username)}</code>\n📧 Gmail: <code>${esc(r.email||'—')}</code>\n💰 Cộng: <b>${money(r.amount)}</b>\n💳 Số dư cũ: ${money(r.oldBalance)}\n💳 Số dư mới: <b>${money(r.newBalance)}</b>\n📌 Trạng thái đơn: <b>Thành công</b>`,parse_mode:'HTML'});
+  }
+  if(command==='/reject'){
+    const {depositId, reason}=parseReject(text);
+    const r=await rejectDeposit(db,admin,depositId,reason);
+    return telegram('sendMessage',{chat_id:chatId,text:`❌ <b>ĐÃ TỪ CHỐI ĐƠN NẠP</b>\n\n🆔 Mã đơn: <code>${esc(r.depositId)}</code>\n👤 Username: <code>@${esc(r.username)}</code>\n📧 Gmail: <code>${esc(r.email||'—')}</code>\n💵 Mệnh giá: <b>${money(r.amount)}</b>\n📝 Lý do: <i>${esc(r.reason)}</i>\n📌 Trạng thái đơn: <b>Thất bại</b>`,parse_mode:'HTML'});
   }
   if(command==='/pay'){
     const {username,amount}=parsePay(text);
