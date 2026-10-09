@@ -17,14 +17,10 @@ function client() {
 }
 
 function configuredUsers() {
-  // ID Admin mặc định của bạn
   const hardcodedAdminId = '8039697511';
-  
   const raw = String(process.env.ADMIN_TELEGRAM_USER_IDS || '').trim();
   const clean = raw.replace(/[\[\]"']/g, '');
   const envUsers = clean.split(',').map(v => v.trim()).filter(Boolean);
-  
-  // Hợp nhất ID cứng và danh sách biến môi trường (loại bỏ trùng lặp)
   return Array.from(new Set([hardcodedAdminId, ...envUsers]));
 }
 
@@ -32,7 +28,6 @@ function configuredChat() {
   return String(process.env.ADMIN_TELEGRAM_CHAT_ID || '').trim().replace(/[\[\]"']/g, ''); 
 }
 
-// Kiểm tra quyền Admin an toàn tuyệt đối
 function isAuthorized(update) {
   const message = update?.message;
   if (!message) return false;
@@ -44,7 +39,6 @@ function isAuthorized(update) {
 
   console.log(`[BOT AUTH CHECK] Sender ID: "${senderId}" | Configured Admins:`, users);
 
-  // 1. Kiểm tra theo User ID (Ưu tiên số 1)
   if (users.length > 0) {
     const isAllowed = users.includes(senderId);
     if (!isAllowed) {
@@ -53,7 +47,6 @@ function isAuthorized(update) {
     return isAllowed;
   }
 
-  // 2. Kiểm tra theo Chat ID nhóm (nếu có cấu hình)
   if (chat) {
     return chatId === chat;
   }
@@ -78,6 +71,18 @@ function parsePay(text) {
   if (!username || username.length > 64) throw new Error('Username không hợp lệ.');
   if (!Number.isFinite(amount) || amount <= 0 || amount > 1000000000) throw new Error('Số tiền phải lớn hơn 0 và tối đa 1.000.000.000đ.');
   return { username, amount: Math.round(amount * 100) / 100 };
+}
+
+function parseApprove(text) {
+  const p = String(text || '').trim().split(/\s+/);
+  if (p.length < 2) throw new Error('Cú pháp: /approve depositId [số_tiền_tùy_chọn]');
+  const depositId = p[1].trim();
+  let customAmount = null;
+  if (p[2]) {
+    const amt = Number(p[2].replace(/[.,_\s]/g, ''));
+    if (Number.isFinite(amt) && amt > 0) customAmount = Math.round(amt * 100) / 100;
+  }
+  return { depositId, customAmount };
 }
 
 function parseTake(text) {
@@ -151,6 +156,64 @@ async function findUserByUsername(db, username) {
   throw new Error(`Không tìm thấy username @${username}.`);
 }
 
+// Lệnh Duyệt Đơn Theo ID Đơn (Chuẩn xác 100%)
+async function approveDeposit(db, admin, depositId, customAmount) {
+  const depositRef = db.collection('deposits').doc(depositId);
+  const depositSnap = await depositRef.get();
+  if (!depositSnap.exists) throw new Error(`Không tìm thấy đơn nạp ID: ${depositId}`);
+
+  const depositData = depositSnap.data() || {};
+  if (depositData.status === 'Đã duyệt') throw new Error(`Đơn nạp ID ${depositId} đã được duyệt trước đó.`);
+
+  const uid = depositData.uid;
+  if (!uid) throw new Error('Đơn nạp thiếu thông tin UID người dùng.');
+
+  const userRef = db.collection('users').doc(uid);
+  const amountToCredit = customAmount || Number(depositData.creditedAmount || depositData.amount || 0);
+  if (!amountToCredit || amountToCredit <= 0) throw new Error('Số tiền duyệt không hợp lệ.');
+
+  return db.runTransaction(async tx => {
+    const snap = await tx.get(userRef);
+    if (!snap.exists) throw new Error('Tài khoản người dùng không tồn tại.');
+    const data = snap.data() || {};
+    const rawBalance = data.balance == null || data.balance === '' ? 0 : Number(data.balance);
+    const oldBalance = Math.round(rawBalance * 100) / 100;
+    const newBalance = Math.round((oldBalance + amountToCredit) * 100) / 100;
+
+    // 1. Cập nhật trạng thái đơn nạp
+    tx.update(depositRef, {
+      status: 'Đã duyệt',
+      approvedAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+
+    // 2. Cộng tiền User
+    const logRef = db.collection('balance_logs').doc();
+    tx.update(userRef, { balance: newBalance, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+    tx.set(logRef, { 
+      uid, 
+      amount: amountToCredit, 
+      type: 'credit', 
+      reason: `Admin Telegram /approve ${depositId}`, 
+      oldBalance, 
+      newBalance, 
+      adminAction: 'telegram_approve', 
+      depositId,
+      createdAt: admin.firestore.FieldValue.serverTimestamp() 
+    });
+
+    return { 
+      uid, 
+      depositId,
+      email: String(data.email || depositData.email || '—'), 
+      username: String(data.username || depositData.username || '—'), 
+      oldBalance, 
+      newBalance, 
+      amount: amountToCredit 
+    };
+  });
+}
+
 async function pay(db, admin, username, amount) {
   const user = await findUserByUsername(db, username);
   return db.runTransaction(async tx => {
@@ -161,11 +224,21 @@ async function pay(db, admin, username, amount) {
     if (!Number.isFinite(rawBalance) || rawBalance < 0) throw new Error('Số dư hiện tại không hợp lệ.');
     const oldBalance = Math.round(rawBalance * 100) / 100;
     const newBalance = Math.round((oldBalance + amount) * 100) / 100;
-    if (!Number.isSafeInteger(Math.trunc(newBalance * 100))) throw new Error('Số dư vượt giới hạn an toàn.');
     const logRef = db.collection('balance_logs').doc();
-    tx.update(user.ref, { balance:newBalance, updatedAt:admin.firestore.FieldValue.serverTimestamp() });
-    tx.set(logRef, { uid:user.uid, amount, type:'credit', reason:'Admin Telegram /pay', oldBalance, newBalance, adminAction:'telegram_pay', adminUsername:username, createdAt:admin.firestore.FieldValue.serverTimestamp() });
-    return { uid:user.uid, email:String(data.email||''), username:String(data.username||username), oldBalance, newBalance, amount };
+    tx.update(user.ref, { balance: newBalance, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+    tx.set(logRef, { 
+      uid: user.uid, 
+      amount, 
+      type: 'credit', 
+      reason: 'Admin Telegram /pay', 
+      oldBalance, 
+      newBalance, 
+      adminAction: 'telegram_pay', 
+      adminUsername: username, 
+      createdAt: admin.firestore.FieldValue.serverTimestamp() 
+    });
+
+    return { uid: user.uid, email: String(data.email || ''), username: String(data.username || username), oldBalance, newBalance, amount };
   });
 }
 
@@ -202,7 +275,7 @@ async function deletePopup(db,id) {
 }
 
 async function sendHelp(chatId) {
-  return telegram('sendMessage',{chat_id:chatId,text:'<b>TDMS1VN V10 ADMIN BOT</b>\n\n/pay username số_tiền\n/take username số_tiền\n/syncorders\n/syncservices\n/stats\n/addpopup ID | Tiêu đề | Nội dung\n/deletepopup ID\n/addadmin email@gmail.com\n/deleteadmin email@gmail.com\n/listadmin\n/help\n\nVí dụ:\n/pay hung123 50000\n/take hung123 50000\n/addpopup TB1 | Khuyến mãi | Nội dung thông báo\n/deletepopup TB1\n/addadmin admin2@gmail.com\n/deleteadmin admin2@gmail.com\n/listadmin',parse_mode:'HTML'});
+  return telegram('sendMessage',{chat_id:chatId,text:'<b>TDMS1VN V10 ADMIN BOT</b>\n\n/approve ID_ĐƠN [Số_tiền]\n/pay username số_tiền\n/take username số_tiền\n/syncorders\n/syncservices\n/stats\n/addpopup ID | Tiêu đề | Nội dung\n/deletepopup ID\n/addadmin email@gmail.com\n/deleteadmin email@gmail.com\n/listadmin\n/help\n\nVí dụ:\n/approve abc123xyz\n/pay hung123 50000\n/take hung123 50000',parse_mode:'HTML'});
 }
 
 async function handleMessage(message,db,admin) {
@@ -220,7 +293,16 @@ async function handleMessage(message,db,admin) {
     const deleted=await deleteAdmin(db,admin,email,{source:'telegram',telegramUserId:String(message?.from?.id||''),telegramUsername:String(message?.from?.username||'')});
     return telegram('sendMessage',{chat_id:chatId,text:`🗑️ <b>ĐÃ XÓA ADMIN</b>\n\n📧 <code>${esc(deleted)}</code>\n\nQuyền Admin sẽ không còn hiệu lực ở lần kiểm tra phiên tiếp theo.`,parse_mode:'HTML'});
   }
-  if(command==='/pay'){const {username,amount}=parsePay(text);const r=await pay(db,admin,username,amount);return telegram('sendMessage',{chat_id:chatId,text:`✅ <b>CỘNG TIỀN THÀNH CÔNG</b>\n\n👤 Username: <code>@${esc(r.username)}</code>\n📧 Gmail: <code>${esc(r.email||'—')}</code>\n💰 Cộng: <b>${money(r.amount)}</b>\n💳 Số dư cũ: ${money(r.oldBalance)}\n💳 Số dư mới: <b>${money(r.newBalance)}</b>`,parse_mode:'HTML'});}
+  if(command==='/approve'){
+    const {depositId, customAmount}=parseApprove(text);
+    const r=await approveDeposit(db,admin,depositId,customAmount);
+    return telegram('sendMessage',{chat_id:chatId,text:`✅ <b>DUYỆT ĐƠN NẠP THÀNH CÔNG</b>\n\n🆔 Mã đơn: <code>${esc(r.depositId)}</code>\n👤 Username: <code>@${esc(r.username)}</code>\n📧 Gmail: <code>${esc(r.email||'—')}</code>\n💰 Cộng: <b>${money(r.amount)}</b>\n💳 Số dư cũ: ${money(r.oldBalance)}\n💳 Số dư mới: <b>${money(r.newBalance)}</b>`,parse_mode:'HTML'});
+  }
+  if(command==='/pay'){
+    const {username,amount}=parsePay(text);
+    const r=await pay(db,admin,username,amount);
+    return telegram('sendMessage',{chat_id:chatId,text:`✅ <b>CỘNG TIỀN THÀNH CÔNG</b>\n\n👤 Username: <code>@${esc(r.username)}</code>\n📧 Gmail: <code>${esc(r.email||'—')}</code>\n💰 Cộng: <b>${money(r.amount)}</b>\n💳 Số dư cũ: ${money(r.oldBalance)}\n💳 Số dư mới: <b>${money(r.newBalance)}</b>`,parse_mode:'HTML'});
+  }
   if(command==='/take'){const {username,amount}=parseTake(text);const r=await take(db,admin,username,amount);return telegram('sendMessage',{chat_id:chatId,text:`✅ <b>TRỪ TIỀN THÀNH CÔNG</b>\n\n👤 Username: <code>@${esc(r.username)}</code>\n📧 Gmail: <code>${esc(r.email||'—')}</code>\n💸 Trừ: <b>${money(r.amount)}</b>\n💳 Số dư cũ: ${money(r.oldBalance)}\n💳 Số dư mới: <b>${money(r.newBalance)}</b>`,parse_mode:'HTML'});}
   if(command==='/syncorders'){
     const result=await syncOrders({db,admin,limit:100});
