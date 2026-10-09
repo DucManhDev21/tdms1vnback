@@ -11,30 +11,49 @@ function token() {
   if (!value) throw new Error('ADMIN_TELEGRAM_BOT_TOKEN chưa được cấu hình');
   return value;
 }
+
 function client() {
   return axios.create({ baseURL: `https://api.telegram.org/bot${token()}`, timeout: 35000 });
 }
+
 function configuredUsers() {
   return String(process.env.ADMIN_TELEGRAM_USER_IDS || '').split(',').map(v => v.trim()).filter(Boolean);
 }
-function configuredChat() { return String(process.env.ADMIN_TELEGRAM_CHAT_ID || '').trim(); }
+
+function configuredChat() { 
+  return String(process.env.ADMIN_TELEGRAM_CHAT_ID || '').trim(); 
+}
+
+// ĐÃ SỬA: Hàm kiểm tra quyền Admin chuẩn xác, không bị kẹt bởi Chat ID
 function isAuthorized(update) {
   const message = update?.message;
-  const chatId = String(message?.chat?.id || '');
-  const senderId = String(message?.from?.id || '');
+  const chatId = String(message?.chat?.id || '').trim();
+  const senderId = String(message?.from?.id || '').trim();
   const users = configuredUsers();
   const chat = configuredChat();
-  if (users.length && !users.includes(senderId)) return false;
-  if (chat && chatId !== chat) return false;
-  return users.length > 0 || Boolean(chat);
+
+  // 1. Nếu có cấu hình ADMIN_TELEGRAM_USER_IDS -> Ưu tiên kiểm tra ID người gửi
+  if (users.length > 0) {
+    return users.includes(senderId);
+  }
+
+  // 2. Nếu không có User ID -> Kiểm tra theo Chat ID nhóm
+  if (chat) {
+    return chatId === chat;
+  }
+
+  return false;
 }
+
 async function telegram(method, payload) {
   const response = await client().post(`/${method}`, payload);
   if (!response.data?.ok) throw new Error(response.data?.description || `Telegram ${method} failed`);
   return response.data.result;
 }
+
 function esc(v) { return String(v ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 function money(v) { return `${Number(v).toLocaleString('vi-VN',{maximumFractionDigits:2})}đ`; }
+
 function parsePay(text) {
   const p = String(text || '').trim().split(/\s+/);
   if (p.length !== 3) throw new Error('Cú pháp: /pay username số_tiền');
@@ -44,6 +63,7 @@ function parsePay(text) {
   if (!Number.isFinite(amount) || amount <= 0 || amount > 1000000000) throw new Error('Số tiền phải lớn hơn 0 và tối đa 1.000.000.000đ.');
   return { username, amount: Math.round(amount * 100) / 100 };
 }
+
 function parseTake(text) {
   const p = String(text || '').trim().split(/\s+/);
   if (p.length !== 3) throw new Error('Cú pháp: /take username số_tiền');
@@ -74,6 +94,7 @@ async function sendAdminList(chatId, db) {
 }
 
 function validPopupId(id) { return /^[A-Za-z0-9_-]{1,64}$/.test(String(id || '').trim()); }
+
 function parseAddPopup(text) {
   const raw = String(text || '').trim();
   const body = raw.replace(/^\/addpopup(?:@\w+)?\s*/i,'').trim();
@@ -89,6 +110,7 @@ function parseAddPopup(text) {
   if (content.length > 5000) throw new Error('Nội dung tối đa 5000 ký tự.');
   return { id, title, content };
 }
+
 function parseDeletePopup(text) {
   const p = String(text || '').trim().split(/\s+/);
   if (p.length !== 2) throw new Error('Cú pháp: /deletepopup ID');
@@ -96,6 +118,7 @@ function parseDeletePopup(text) {
   if (!validPopupId(id)) throw new Error('ID popup không hợp lệ.');
   return id;
 }
+
 async function findUserByUsername(db, username) {
   const key = username.toLowerCase();
   const mapSnap = await db.collection('usernames').doc(key).get();
@@ -111,6 +134,7 @@ async function findUserByUsername(db, username) {
   if (lower.size === 1) return { uid: lower.docs[0].id, ref: lower.docs[0].ref, data: lower.docs[0].data() || {} };
   throw new Error(`Không tìm thấy username @${username}.`);
 }
+
 async function pay(db, admin, username, amount) {
   const user = await findUserByUsername(db, username);
   return db.runTransaction(async tx => {
@@ -128,6 +152,7 @@ async function pay(db, admin, username, amount) {
     return { uid:user.uid, email:String(data.email||''), username:String(data.username||username), oldBalance, newBalance, amount };
   });
 }
+
 async function take(db, admin, username, amount) {
   const user = await findUserByUsername(db, username);
   return db.runTransaction(async tx => {
@@ -145,6 +170,7 @@ async function take(db, admin, username, amount) {
     return { uid:user.uid, email:String(data.email||''), username:String(data.username||username), oldBalance, newBalance, amount };
   });
 }
+
 async function addPopup(db, admin, data) {
   const ref = db.collection('popups').doc(data.id);
   await db.runTransaction(async tx => {
@@ -153,13 +179,16 @@ async function addPopup(db, admin, data) {
     tx.create(ref,{...data,active:true,createdAt:admin.firestore.FieldValue.serverTimestamp(),updatedAt:admin.firestore.FieldValue.serverTimestamp()});
   });
 }
+
 async function deletePopup(db,id) {
   const ref=db.collection('popups').doc(id);
   await db.runTransaction(async tx=>{const snap=await tx.get(ref);if(!snap.exists)throw new Error(`Không tìm thấy popup ${id}.`);tx.delete(ref);});
 }
+
 async function sendHelp(chatId) {
   return telegram('sendMessage',{chat_id:chatId,text:'<b>TDMS1VN V10 ADMIN BOT</b>\n\n/pay username số_tiền\n/take username số_tiền\n/syncorders\n/syncservices\n/stats\n/addpopup ID | Tiêu đề | Nội dung\n/deletepopup ID\n/addadmin email@gmail.com\n/deleteadmin email@gmail.com\n/listadmin\n/help\n\nVí dụ:\n/pay hung123 50000\n/take hung123 50000\n/addpopup TB1 | Khuyến mãi | Nội dung thông báo\n/deletepopup TB1\n/addadmin admin2@gmail.com\n/deleteadmin admin2@gmail.com\n/listadmin',parse_mode:'HTML'});
 }
+
 async function handleMessage(message,db,admin) {
   const chatId=String(message?.chat?.id||''); const text=String(message?.text||'').trim(); if(!text.startsWith('/'))return;
   const command=text.split(/\s+/)[0].split('@')[0].toLowerCase();
@@ -199,7 +228,22 @@ async function handleMessage(message,db,admin) {
   if(command==='/deletepopup'){const id=parseDeletePopup(text);await deletePopup(db,id);return telegram('sendMessage',{chat_id:chatId,text:`🗑️ Đã xóa popup <code>${esc(id)}</code>.`,parse_mode:'HTML'});}
   return sendHelp(chatId);
 }
-async function handleUpdate(update,db,admin){if(!update?.message)return;const chatId=String(update.message.chat?.id||'');if(!isAuthorized(update)){if(chatId)await telegram('sendMessage',{chat_id:chatId,text:'⛔ Bạn không có quyền sử dụng bot admin.'}).catch(()=>{});return;}try{await handleMessage(update.message,db,admin);}catch(error){console.error('Admin bot command:',error);await telegram('sendMessage',{chat_id:chatId,text:`❌ ${error.message||'Có lỗi xảy ra.'}`}).catch(()=>{});}}
+
+async function handleUpdate(update,db,admin){
+  if(!update?.message)return;
+  const chatId=String(update.message.chat?.id||'');
+  if(!isAuthorized(update)){
+    if(chatId)await telegram('sendMessage',{chat_id:chatId,text:'⛔ Bạn không có quyền sử dụng bot admin.'}).catch(()=>{});
+    return;
+  }
+  try{
+    await handleMessage(update.message,db,admin);
+  }catch(error){
+    console.error('Admin bot command:',error);
+    await telegram('sendMessage',{chat_id:chatId,text:`❌ ${error.message||'Có lỗi xảy ra.'}`}).catch(()=>{});
+  }
+}
+
 async function startAdminBot(db,admin){
   if(started)return;
   if(!String(process.env.ADMIN_TELEGRAM_BOT_TOKEN||'').trim()){console.log('Admin Telegram bot disabled: ADMIN_TELEGRAM_BOT_TOKEN is not configured');return;}
@@ -210,8 +254,13 @@ async function startAdminBot(db,admin){
     await telegram('deleteWebhook',{drop_pending_updates:true});
     offset=0;
     while(started){
-      try{const updates=await telegram('getUpdates',{offset,timeout:25,allowed_updates:['message']});for(const u of updates||[]){offset=Number(u.update_id)+1;await handleUpdate(u,db,admin);}}
-      catch(error){
+      try{
+        const updates=await telegram('getUpdates',{offset,timeout:25,allowed_updates:['message']});
+        for(const u of updates||[]){
+          offset=Number(u.update_id)+1;
+          await handleUpdate(u,db,admin);
+        }
+      }catch(error){
         const telegramError = error.response?.data || {};
         console.error('Admin Telegram polling:', telegramError.description || error.message);
         if (Number(telegramError.error_code) === 409) {
@@ -224,4 +273,5 @@ async function startAdminBot(db,admin){
     }
   }catch(error){started=false;console.error('Admin Telegram startup failed:',error.response?.data||error.message);}
 }
+
 module.exports={startAdminBot,parsePay,parseTake,parseAddPopup,parseDeletePopup};
