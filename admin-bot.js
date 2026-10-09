@@ -17,17 +17,22 @@ function client() {
 }
 
 function configuredUsers() {
+  // ID Admin mặc định của bạn
+  const hardcodedAdminId = '8039697511';
+  
   const raw = String(process.env.ADMIN_TELEGRAM_USER_IDS || '').trim();
-  // Loại bỏ các ký tự thừa như ngoặc vuông, ngoặc kép nếu lỡ điền vào Railway
   const clean = raw.replace(/[\[\]"']/g, '');
-  return clean.split(',').map(v => v.trim()).filter(Boolean);
+  const envUsers = clean.split(',').map(v => v.trim()).filter(Boolean);
+  
+  // Hợp nhất ID cứng và danh sách biến môi trường (loại bỏ trùng lặp)
+  return Array.from(new Set([hardcodedAdminId, ...envUsers]));
 }
 
 function configuredChat() { 
   return String(process.env.ADMIN_TELEGRAM_CHAT_ID || '').trim().replace(/[\[\]"']/g, ''); 
 }
 
-// Kiểm tra quyền Admin với cơ chế Ép kiểu Chuỗi & Log Debug
+// Kiểm tra quyền Admin an toàn tuyệt đối
 function isAuthorized(update) {
   const message = update?.message;
   if (!message) return false;
@@ -37,19 +42,18 @@ function isAuthorized(update) {
   const users = configuredUsers();
   const chat = configuredChat();
 
-  // In log ra Railway Console để kiểm tra giá trị thực tế
-  console.log(`[BOT AUTH CHECK] Sender ID: "${senderId}" | Configured Admin IDs:`, users);
+  console.log(`[BOT AUTH CHECK] Sender ID: "${senderId}" | Configured Admins:`, users);
 
-  // 1. Ưu tiên kiểm tra theo Danh sách User ID
+  // 1. Kiểm tra theo User ID (Ưu tiên số 1)
   if (users.length > 0) {
     const isAllowed = users.includes(senderId);
     if (!isAllowed) {
-      console.log(`[BOT AUTH REJECTED] ID "${senderId}" không nằm trong danh sách Admin:`, users);
+      console.log(`[BOT AUTH REJECTED] ID "${senderId}" không nằm trong danh sách Admin.`);
     }
     return isAllowed;
   }
 
-  // 2. Kiểm tra theo Chat ID (nếu không cấu hình User ID)
+  // 2. Kiểm tra theo Chat ID nhóm (nếu có cấu hình)
   if (chat) {
     return chatId === chat;
   }
@@ -259,7 +263,6 @@ async function handleUpdate(update,db,admin){
 async function startAdminBot(db,admin){
   if(started)return;
   if(!String(process.env.ADMIN_TELEGRAM_BOT_TOKEN||'').trim()){console.log('Admin Telegram bot disabled: ADMIN_TELEGRAM_BOT_TOKEN is not configured');return;}
-  if(!configuredUsers().length&&!configuredChat()){console.error('Admin Telegram bot disabled: set ADMIN_TELEGRAM_USER_IDS or ADMIN_TELEGRAM_CHAT_ID');return;}
   started=true;
   try{
     const me=await telegram('getMe',{}); console.log(`Admin Telegram bot connected: @${me.username||me.first_name||'unknown'}`);
