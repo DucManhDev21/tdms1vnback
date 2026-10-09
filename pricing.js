@@ -1,4 +1,4 @@
-const DEFAULT_MARKUP_PERCENT = 30;
+const DEFAULT_MARKUP_PERCENT = 15;
 const MAX_MARKUP_PERCENT = 1000;
 
 function roundMoney(value) {
