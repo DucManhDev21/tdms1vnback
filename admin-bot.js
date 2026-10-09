@@ -17,27 +17,39 @@ function client() {
 }
 
 function configuredUsers() {
-  return String(process.env.ADMIN_TELEGRAM_USER_IDS || '').split(',').map(v => v.trim()).filter(Boolean);
+  const raw = String(process.env.ADMIN_TELEGRAM_USER_IDS || '').trim();
+  // Loại bỏ các ký tự thừa như ngoặc vuông, ngoặc kép nếu lỡ điền vào Railway
+  const clean = raw.replace(/[\[\]"']/g, '');
+  return clean.split(',').map(v => v.trim()).filter(Boolean);
 }
 
 function configuredChat() { 
-  return String(process.env.ADMIN_TELEGRAM_CHAT_ID || '').trim(); 
+  return String(process.env.ADMIN_TELEGRAM_CHAT_ID || '').trim().replace(/[\[\]"']/g, ''); 
 }
 
-// ĐÃ SỬA: Hàm kiểm tra quyền Admin chuẩn xác, không bị kẹt bởi Chat ID
+// Kiểm tra quyền Admin với cơ chế Ép kiểu Chuỗi & Log Debug
 function isAuthorized(update) {
   const message = update?.message;
-  const chatId = String(message?.chat?.id || '').trim();
-  const senderId = String(message?.from?.id || '').trim();
+  if (!message) return false;
+
+  const chatId = String(message.chat?.id || '').trim();
+  const senderId = String(message.from?.id || '').trim();
   const users = configuredUsers();
   const chat = configuredChat();
 
-  // 1. Nếu có cấu hình ADMIN_TELEGRAM_USER_IDS -> Ưu tiên kiểm tra ID người gửi
+  // In log ra Railway Console để kiểm tra giá trị thực tế
+  console.log(`[BOT AUTH CHECK] Sender ID: "${senderId}" | Configured Admin IDs:`, users);
+
+  // 1. Ưu tiên kiểm tra theo Danh sách User ID
   if (users.length > 0) {
-    return users.includes(senderId);
+    const isAllowed = users.includes(senderId);
+    if (!isAllowed) {
+      console.log(`[BOT AUTH REJECTED] ID "${senderId}" không nằm trong danh sách Admin:`, users);
+    }
+    return isAllowed;
   }
 
-  // 2. Nếu không có User ID -> Kiểm tra theo Chat ID nhóm
+  // 2. Kiểm tra theo Chat ID (nếu không cấu hình User ID)
   if (chat) {
     return chatId === chat;
   }
