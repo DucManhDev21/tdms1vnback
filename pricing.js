@@ -35,7 +35,7 @@ function applyPricing(service, override = null) {
   if (!service) return null;
   const providerUnitRate = Number(service.unitRateVnd ?? service.rate);
   
-  // Trả về null để lọc bỏ dịch vụ lỗi giá thay vì throw Error gây crash hệ thống
+  // Trả về null thay vì throw Error để lọc bỏ dịch vụ lỗi giá mà không làm sập backend 502
   if (!Number.isFinite(providerUnitRate) || providerUnitRate < 0) {
     return null;
   }

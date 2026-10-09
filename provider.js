@@ -142,13 +142,18 @@ async function providerRequest(params) {
 
 async function providerServices() {
   const data = await providerRequest({ action: 'services' });
-  if (!Array.isArray(data)) {
-    throw Object.assign(
-      new Error('Provider services response không phải là mảng'),
-      { providerResponse: data }
-    );
+  
+  // Tự động nhận diện cấu trúc mảng nếu Provider bọc trong Object
+  if (Array.isArray(data)) return data;
+  if (data && typeof data === 'object') {
+    if (Array.isArray(data.services)) return data.services;
+    if (Array.isArray(data.data)) return data.data;
   }
-  return data;
+  
+  throw Object.assign(
+    new Error('Provider services response không chứa danh sách mảng dịch vụ'),
+    { providerResponse: data }
+  );
 }
 
 async function providerAddOrder({ service, link, quantity, comments, reaction }) {
