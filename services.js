@@ -24,80 +24,89 @@ function toBool(value) {
   return ['1', 'true', 'yes', 'y', 'on'].includes(String(value).toLowerCase());
 }
 
+// Hàm chuẩn hóa an toàn tuyệt đối, không bao giờ văng Exception
 function normalizeService(row) {
-  const service = Number(row.service ?? row.id);
-  const name = String(row.name ?? '').trim();
-  const category = String(row.category ?? row.type ?? 'Khác').trim() || 'Khác';
-  const platform = detectPlatform(name, category, row);
-  const type = String(row.type ?? 'Default').trim() || 'Default';
-  const rateNumber = Number.parseFloat(row.rate ?? 0);
-  const minNumber = Number.parseInt(row.min ?? 0, 10);
-  const maxNumber = Number.parseInt(row.max ?? 0, 10);
-  const mode = String(process.env.PROVIDER_RATE_MODE || 'USD_PER_1000').trim().toUpperCase();
-  const clean = value => roundMoney(value);
+  try {
+    if (!row || typeof row !== 'object') return null;
 
-  if (!Number.isFinite(service) || !Number.isSafeInteger(service) || !name || !Number.isFinite(rateNumber) || !Number.isFinite(minNumber) || !Number.isFinite(maxNumber) || rateNumber < 0 || minNumber < 0 || maxNumber < minNumber) return null;
+    const service = Number(row.service ?? row.id);
+    const name = String(row.name ?? '').trim();
+    const category = String(row.category ?? row.type ?? 'Khác').trim() || 'Khác';
+    const platform = detectPlatform(name, category, row);
+    const type = String(row.type ?? 'Default').trim() || 'Default';
+    const rateNumber = Number.parseFloat(row.rate ?? 0);
+    const minNumber = Number.parseInt(row.min ?? 0, 10);
+    const maxNumber = Number.parseInt(row.max ?? 0, 10);
+    const mode = String(process.env.PROVIDER_RATE_MODE || 'USD_PER_1000').trim().toUpperCase();
+    const clean = value => roundMoney(value);
 
-  let providerUnitVnd;
-  if (mode === 'VND_PER_1') {
-    providerUnitVnd = rateNumber;
-  } else if (mode === 'VND_PER_1000') {
-    providerUnitVnd = rateNumber / 1000;
-  } else if (mode === 'USD_PER_1000') {
-    const usdVnd = Number(process.env.USD_VND_RATE || 27000);
-    if (!Number.isFinite(usdVnd) || usdVnd <= 0) throw new Error('USD_VND_RATE is invalid');
-    const providerUsdPer1000 = rateNumber >= 10 ? rateNumber / 1000 : rateNumber;
-    providerUnitVnd = providerUsdPer1000 * usdVnd / 1000;
-  } else {
-    throw new Error(`Unsupported PROVIDER_RATE_MODE: ${mode}`);
+    if (!Number.isFinite(service) || !Number.isSafeInteger(service) || !name || !Number.isFinite(rateNumber) || !Number.isFinite(minNumber) || !Number.isFinite(maxNumber) || rateNumber <= 0 || minNumber < 0 || maxNumber < minNumber) {
+      return null;
+    }
+
+    let providerUnitVnd;
+    if (mode === 'VND_PER_1') {
+      providerUnitVnd = rateNumber;
+    } else if (mode === 'VND_PER_1000') {
+      providerUnitVnd = rateNumber / 1000;
+    } else if (mode === 'USD_PER_1000') {
+      const usdVnd = Number(process.env.USD_VND_RATE || 27000);
+      if (!Number.isFinite(usdVnd) || usdVnd <= 0) return null;
+      const providerUsdPer1000 = rateNumber >= 10 ? rateNumber / 1000 : rateNumber;
+      providerUnitVnd = providerUsdPer1000 * usdVnd / 1000;
+    } else {
+      return null;
+    }
+
+    if (!Number.isFinite(providerUnitVnd) || providerUnitVnd < 0) return null;
+
+    const base = {
+      service,
+      name,
+      type,
+      platform,
+      category,
+      providerRate: clean(rateNumber),
+      providerRateMode: mode,
+      providerUnitRateVnd: clean(providerUnitVnd),
+      min: String(minNumber),
+      max: String(maxNumber),
+      refill: toBool(row.refill),
+      cancel: toBool(row.cancel)
+    };
+
+    return applyPricing(base);
+  } catch (err) {
+    return null;
   }
-
-  const base = {
-    service,
-    name,
-    type,
-    platform,
-    category,
-    providerRate: clean(rateNumber),
-    providerRateMode: mode,
-    providerUnitRateVnd: clean(providerUnitVnd),
-    min: String(minNumber),
-    max: String(maxNumber),
-    refill: toBool(row.refill),
-    cancel: toBool(row.cancel)
-  };
-
-  return applyPricing(base);
 }
 
 async function fetchProviderServices() {
-  const data = await providerServices();
-  if (!Array.isArray(data)) throw new Error('Provider services response is not an array');
-  const normalized = data.map(normalizeService).filter(Boolean);
-  if (!normalized.length) throw new Error('Provider returned no usable services');
-  return normalized;
+  try {
+    const data = await providerServices();
+    if (!Array.isArray(data)) return [];
+    return data.map(normalizeService).filter(Boolean);
+  } catch (error) {
+    console.error('fetchProviderServices error:', error?.message || error);
+    return [];
+  }
 }
 
 async function persistCatalog(db, services) {
   if (!db || !services.length) return;
-  const chunkSize = 400;
-  for (let index = 0; index < services.length; index += chunkSize) {
-    const batch = db.batch();
-    for (const service of services.slice(index, index + chunkSize)) {
-      const ref = db.collection('service_catalog').doc(String(service.service));
-      batch.set(ref, {
-        ...service,
-        lastSyncedAt: new Date()
-      }, { merge: true });
+  try {
+    const chunkSize = 400;
+    for (let index = 0; index < services.length; index += chunkSize) {
+      const batch = db.batch();
+      for (const service of services.slice(index, index + chunkSize)) {
+        const ref = db.collection('service_catalog').doc(String(service.service));
+        batch.set(ref, { ...service, lastSyncedAt: new Date() }, { merge: true });
+      }
+      await batch.commit();
     }
-    await batch.commit();
+  } catch (err) {
+    console.error('persistCatalog error:', err.message);
   }
-  await db.collection('system').doc('serviceSync').set({
-    serviceCount: services.length,
-    syncedAt: new Date(),
-    providerRateMode: process.env.PROVIDER_RATE_MODE || 'USD_PER_1000',
-    defaultMarkupPercent: defaultMarkupPercent()
-  }, { merge: true });
 }
 
 async function getServices(forceRefresh = false, db = null) {
@@ -111,23 +120,26 @@ async function getServices(forceRefresh = false, db = null) {
       let overrides = new Map();
       try {
         overrides = await getPricingOverrides(db);
-      } catch (error) {
-        console.error('pricing overrides unavailable; using defaults:', error?.message || error);
-      }
+      } catch {}
+
       const fresh = freshBase
-        .map(service => applyPricing(service, overrides.get(String(service.service))))
+        .map(service => {
+          try { return applyPricing(service, overrides.get(String(service.service))); }
+          catch { return service; }
+        })
         .filter(Boolean)
-        .filter(service => service.enabled);
-      cachedServices = fresh;
-      cachedAt = Date.now();
-      if (db) await persistCatalog(db, fresh);
-      return fresh;
-    } catch (error) {
-      if (cachedServices?.length) {
-        console.error('Provider refresh failed; serving cached services:', error.message);
-        return cachedServices;
+        .filter(service => service.enabled !== false);
+
+      if (fresh.length > 0) {
+        cachedServices = fresh;
+        cachedAt = Date.now();
+        if (db) await persistCatalog(db, fresh);
+        return fresh;
       }
-      throw error;
+      
+      return await loadCatalogFallback(db);
+    } catch (error) {
+      return await loadCatalogFallback(db);
     } finally {
       refreshPromise = null;
     }
@@ -137,29 +149,17 @@ async function getServices(forceRefresh = false, db = null) {
 }
 
 async function loadCatalogFallback(db) {
-  if (!db) return [];
+  if (!db) return cachedServices || [];
   try {
     const snap = await db.collection('service_catalog').limit(2000).get();
     const rows = snap.docs.map(d => d.data() || {}).filter(x => x.service != null);
-    return rows;
-  } catch (error) {
-    console.error('service catalog fallback:', error?.code || 'unknown', error?.message || error);
-    return [];
-  }
-}
-
-async function syncServices(db, forceRefresh = true) {
-  try {
-    return await getServices(forceRefresh, db);
-  } catch (error) {
-    const fallback = await loadCatalogFallback(db);
-    if (fallback.length) {
-      cachedServices = fallback;
+    if (rows.length) {
+      cachedServices = rows;
       cachedAt = Date.now();
-      console.error('Provider sync failed; using Firestore catalog fallback:', error?.message || error);
-      return fallback;
     }
-    throw error;
+    return rows;
+  } catch {
+    return cachedServices || [];
   }
 }
 
@@ -167,33 +167,20 @@ router.get('/', async (req, res) => {
   try {
     const services = await getServices(req.query.refresh === '1', req.app.locals.db);
     res.set('Cache-Control', 'no-store');
-    res.json({ services, cachedAt, count: services.length, defaultMarkupPercent: defaultMarkupPercent(), degraded: false });
+    res.json({
+      services,
+      cachedAt,
+      count: services.length,
+      defaultMarkupPercent: defaultMarkupPercent(),
+      degraded: services.length === 0
+    });
   } catch (error) {
-    const fallback = await loadCatalogFallback(req.app.locals.db);
-    if (fallback.length) {
-      cachedServices = fallback;
-      cachedAt = Date.now();
-      console.error('services: Provider unavailable; returning Firestore catalog fallback:', error.message);
-      res.set('Cache-Control', 'no-store');
-      return res.json({
-        services: fallback,
-        cachedAt,
-        count: fallback.length,
-        defaultMarkupPercent: defaultMarkupPercent(),
-        degraded: true,
-        provider: { available: false, code: error?.providerCode || error?.code || 'PROVIDER_ERROR', httpStatus: error?.providerStatus || null }
-      });
-    }
-    console.error('services:', error);
-    res.status(502).json({
-      error: 'Không lấy được danh sách dịch vụ từ Provider',
-      code: error?.providerCode || error?.code || 'PROVIDER_ERROR',
-      httpStatus: error?.providerStatus || null,
-      message: String(error?.message || 'Provider unavailable').slice(0, 300),
-      providerConfigured: Boolean(
-        String(process.env.PROVIDER_API_URL || '').trim() &&
-        String(process.env.PROVIDER_API_KEY || '').trim()
-      )
+    res.status(200).json({
+      services: [],
+      cachedAt: Date.now(),
+      count: 0,
+      defaultMarkupPercent: defaultMarkupPercent(),
+      degraded: true
     });
   }
 });
@@ -207,13 +194,8 @@ router.get('/:serviceId', async (req, res) => {
     if (!service) return res.status(404).json({ error: 'Không tìm thấy dịch vụ' });
     res.json({ service });
   } catch (error) {
-    console.error('service detail:', error.message);
     res.status(502).json({ error: 'Không lấy được dịch vụ' });
   }
 });
 
 module.exports = router;
-module.exports.getServices = getServices;
-module.exports.syncServices = syncServices;
-module.exports.loadCatalogFallback = loadCatalogFallback;
-module.exports.normalizeService = normalizeService;

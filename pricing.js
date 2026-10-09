@@ -1,4 +1,4 @@
-const DEFAULT_MARKUP_PERCENT = 0;
+const DEFAULT_MARKUP_PERCENT = 30;
 const MAX_MARKUP_PERCENT = 1000;
 
 function roundMoney(value) {
@@ -17,25 +17,31 @@ function defaultMarkupPercent() {
 
 async function getPricingOverrides(db) {
   if (!db) return new Map();
-  const snap = await db.collection('service_pricing').get();
-  const map = new Map();
-  for (const doc of snap.docs) {
-    const data = doc.data() || {};
-    map.set(String(doc.id), {
-      markupPercent: parseMarkup(data.markupPercent, defaultMarkupPercent()),
-      fixedUnitRateVnd: data.fixedUnitRateVnd == null || data.fixedUnitRateVnd === '' ? null : roundMoney(data.fixedUnitRateVnd),
-      enabled: data.enabled !== false,
-      updatedAt: data.updatedAt || null
-    });
+  try {
+    const snap = await db.collection('service_pricing').get();
+    const map = new Map();
+    for (const doc of snap.docs) {
+      const data = doc.data() || {};
+      map.set(String(doc.id), {
+        markupPercent: parseMarkup(data.markupPercent, defaultMarkupPercent()),
+        fixedUnitRateVnd: data.fixedUnitRateVnd == null || data.fixedUnitRateVnd === '' ? null : roundMoney(data.fixedUnitRateVnd),
+        enabled: data.enabled !== false,
+        updatedAt: data.updatedAt || null
+      });
+    }
+    return map;
+  } catch (err) {
+    console.error('getPricingOverrides error:', err.message);
+    return new Map();
   }
-  return map;
 }
 
 function applyPricing(service, override = null) {
   if (!service) return null;
-  const providerUnitRate = Number(service.unitRateVnd ?? service.rate);
   
-  // Trả về null thay vì throw Error để lọc bỏ dịch vụ lỗi giá mà không làm sập backend 502
+  const providerUnitRate = Number(service.unitRateVnd ?? service.providerUnitRateVnd ?? service.rate);
+  
+  // Trả về null để bỏ qua dịch vụ lỗi giá thay vì throw Error làm sập server
   if (!Number.isFinite(providerUnitRate) || providerUnitRate < 0) {
     return null;
   }

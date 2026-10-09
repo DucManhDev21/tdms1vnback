@@ -143,7 +143,7 @@ async function providerRequest(params) {
 async function providerServices() {
   const data = await providerRequest({ action: 'services' });
   
-  // Tự động nhận diện cấu trúc mảng nếu Provider bọc trong Object
+  // Tự động giải bọc mảng nếu Provider bọc trong Object
   if (Array.isArray(data)) return data;
   if (data && typeof data === 'object') {
     if (Array.isArray(data.services)) return data.services;
