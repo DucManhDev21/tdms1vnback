@@ -18,23 +18,23 @@ function parseProviderOrderId(data) {
   return value == null ? '' : String(value);
 }
 
-function normalizeProviderStatus(value) {
-  const s = String(value || '').toLowerCase();
-  if (s.includes('complete')) return 'Completed';
-  if (s.includes('partial')) return 'Partial';
-  if (s.includes('cancel')) return 'Canceled';
-  if (s.includes('progress')) return 'In progress';
-  return 'Pending';
-}
+// Bọc gọi Provider với timeout 12 giây để chống treo server
+async function createProviderOrderWithTimeout({ serviceId, link, quantity }) {
+  const timeoutPromise = new Promise((_, reject) => {
+    setTimeout(() => reject(new Error('Provider phản hồi quá chậm (Timeout 12s)')), 12000);
+  });
 
-async function createProviderOrder({ serviceId, link, quantity }) {
-  const data = await providerAddOrder({ service: serviceId, link, quantity });
-  const providerOrderId = parseProviderOrderId(data);
-  if (!providerOrderId) {
-    const message = data?.error || data?.message || 'Provider không trả về mã đơn hàng';
-    throw new Error(String(message));
-  }
-  return providerOrderId;
+  const apiPromise = (async () => {
+    const data = await providerAddOrder({ service: serviceId, link, quantity });
+    const providerOrderId = parseProviderOrderId(data);
+    if (!providerOrderId) {
+      const message = data?.error || data?.message || 'Provider không trả về mã đơn hàng';
+      throw new Error(String(message));
+    }
+    return providerOrderId;
+  })();
+
+  return Promise.race([apiPromise, timeoutPromise]);
 }
 
 router.post('/', requireUser, async (req, res) => {
@@ -134,10 +134,11 @@ router.post('/', requireUser, async (req, res) => {
     if (result.duplicate) return res.status(200).json({ ok: true, duplicate: true, orderId: result.orderId });
 
     try {
-      const providerOrderId = await createProviderOrder({ serviceId: parsedServiceId, link: String(link).trim(), quantity: parsedQuantity });
+      const providerOrderId = await createProviderOrderWithTimeout({ serviceId: parsedServiceId, link: String(link).trim(), quantity: parsedQuantity });
       await db.collection('orders').doc(result.orderId).update({ providerOrderId, status: 'Pending', providerCallCompletedAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() });
       return res.status(201).json({ ok: true, orderId: result.orderId, providerOrderId, totalPrice });
     } catch (providerError) {
+      // Hoàn tiền tự động khi Provider lỗi hoặc quá thời gian chờ
       const orderRef = db.collection('orders').doc(result.orderId);
       await db.runTransaction(async tx => {
         const orderSnap = await tx.get(orderRef);
@@ -154,7 +155,7 @@ router.post('/', requireUser, async (req, res) => {
         const logRef = db.collection('balance_logs').doc();
         tx.set(logRef, { uid, amount: refund, type: 'credit', reason: `Hoàn tiền đơn ${result.orderId}: Provider error`, oldBalance, newBalance, orderId: result.orderId, createdAt: admin.firestore.FieldValue.serverTimestamp() });
       });
-      return res.status(502).json({ error: 'Provider lỗi, hệ thống đã hoàn tiền 100%', refunded: true, orderId: result.orderId });
+      return res.status(502).json({ error: 'Provider lỗi hoặc phản hồi chậm, hệ thống đã hoàn tiền tự động', refunded: true, orderId: result.orderId });
     }
   } catch (error) {
     if (error.code === 'INSUFFICIENT_BALANCE') return res.status(400).json({ error: 'Số dư không đủ' });
