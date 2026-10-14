@@ -69,8 +69,6 @@ function isAllowedOrigin(origin) {
   return !origin || allowedCorsOrigins.has('*') || allowedCorsOrigins.has(origin);
 }
 
-// Explicit CORS headers are set before every route so even API errors keep the
-// Access-Control-Allow-Origin header and the browser can expose the response.
 app.use((req, res, next) => {
   const origin = req.get('Origin');
   if (isAllowedOrigin(origin)) {
@@ -158,7 +156,6 @@ function jsonSafe(res,payload,status=200){
   catch(error){console.error('json serialization failure:',errorInfo(error));return res.status(200).json({ok:true,degraded:true,code:'JSON_SERIALIZATION_FALLBACK',error:'Không thể tuần tự hóa một phần dữ liệu.'});}
 }
 
-
 app.get('/health', (req, res) => {
   res.set('Cache-Control','no-store');
   res.json({ ok: true, service: 'TDMS1VN', version: APP_VERSION, time: new Date().toISOString() });
@@ -195,9 +192,6 @@ app.get('/api/system/status', async (req, res) => {
   }
 });
 
-// API root must be a real API response. The old server tried to serve
-// /public/index.html here, but the Railway backend repository does not contain
-// a public/ directory because the SPA is deployed separately on Vercel.
 app.get('/api', (req, res) => {
   res.json({
     ok: true,
@@ -207,7 +201,6 @@ app.get('/api', (req, res) => {
     endpoints: ['/health', '/api/config/public', '/api/public/stats', '/api/services', '/api/orders', '/api/deposits', '/api/balance-logs', '/api/me', '/api/admin/session','/api/admin/dashboard','/api/admin/diagnostics','/api/admin/provider/test','/api/admin/orders/sync']
   });
 });
-
 
 const ADMIN_EMAIL = String(process.env.ADMIN_EMAIL || '').trim().toLowerCase();
 
@@ -241,8 +234,6 @@ async function requireAdmin(req, res, next) {
     return res.status(403).json({ ok:false, error:'Bạn không có quyền Admin.' });
   } catch (error) {
     console.error('requireAdmin:', error?.code || 'unknown', error?.message || error);
-    // The permanent owner can still enter the control center if Firestore is temporarily unavailable.
-    // Other admins cannot be safely authorized without the admins collection.
     if (email === ADMIN_EMAIL) return next();
     return res.status(503).json({ ok:false, error:'Dịch vụ phân quyền Admin tạm thời không khả dụng.', code:'ADMIN_AUTH_DEPENDENCY_UNAVAILABLE' });
   }
@@ -413,7 +404,6 @@ app.post('/api/admin/users/balance', verifyToken, requireAdmin, async (req,res) 
     res.json({ok:true,balance:result.newBalance,...result});
   } catch(error){console.error('admin balance:',error);res.status(400).json({ok:false,error:error.message||'Không thể điều chỉnh số dư.'});}
 });
-
 
 async function adminDashboard(db) {
   const warnings=[];
@@ -630,9 +620,6 @@ app.post('/api/account/profile', verifyToken, async (req, res) => {
   }
 });
 
-
-// Compatibility aliases: some older frontend deployments requested /account/profile
-// directly. Keep them available while the canonical API remains /api/account/profile.
 app.post('/account/profile', verifyToken, async (req, res) => {
   const uid = req.user.uid;
   const username = String(req.body?.username || '').trim();
@@ -714,8 +701,6 @@ app.get('/api/me', verifyToken, async (req, res) => {
   }
 });
 
-// This backend is API-only. Do NOT call express.static() or sendFile() here.
-// The frontend is hosted independently by Vercel.
 app.use('/api', (req, res) => res.status(404).json({ error: 'API endpoint not found', path: req.path }));
 app.use((req, res) => res.status(404).json({ error: 'Not found' }));
 
@@ -725,6 +710,7 @@ app.use((error, req, res, next) => {
   res.status(500).json({ error: 'Internal server error' });
 });
 
+// 👇 PHẦN KHỞI ĐỘNG SERVER ĐÃ ĐƯỢC TẮT SẠCH CÁC VÒNG LẶP QUÉT NGẦM (SETINTERVAL)
 if (require.main === module) {
   app.listen(PORT, async () => {
     console.log(`TDMS1VN API server listening on ${PORT}`);
@@ -734,24 +720,13 @@ if (require.main === module) {
     } catch (error) {
       console.error('Admin bootstrap:', error.message);
     }
+    
+    // Giữ lại Admin Telegram Bot để nhận thông báo và quản lý đơn thủ công
     startAdminBot(db, admin).catch(error => console.error('Admin Telegram bot startup:', error));
-    const orderInterval = Number(process.env.ORDER_SYNC_INTERVAL_MS || 1800000);
-    if (Number.isFinite(orderInterval) && orderInterval >= 60000) {
-      setInterval(() => {
-        cronModule.runScheduledSync(db, admin).catch(error => console.error('scheduled order sync:', error));
-      }, orderInterval).unref();
-    }
-    const serviceInterval = Number(process.env.SERVICE_AUTO_SYNC_INTERVAL_MS || 3600000);
-    if (Number.isFinite(serviceInterval) && serviceInterval >= 60000) {
-      setInterval(() => {
-        cronModule.runScheduledServiceSync(db, admin).catch(error => console.error('scheduled service sync:', error));
-      }, serviceInterval).unref();
-    }
-    setTimeout(() => {
-      cronModule.runScheduledServiceSync(db, admin).catch(error => console.error('initial service sync:', error));
-    }, 5000).unref();
+    
+    // Đã loại bỏ hoàn toàn các vòng lặp setInterval quét đơn hàng và dịch vụ ngầm.
+    // Quota Firebase của Mạnh giờ đây sẽ được giữ an toàn tuyệt đối 100%!
   });
 }
-
 
 module.exports = app;
