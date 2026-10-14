@@ -735,7 +735,7 @@ if (require.main === module) {
       console.error('Admin bootstrap:', error.message);
     }
     startAdminBot(db, admin).catch(error => console.error('Admin Telegram bot startup:', error));
-    const orderInterval = Number(process.env.ORDER_SYNC_INTERVAL_MS || 300000);
+    const orderInterval = Number(process.env.ORDER_SYNC_INTERVAL_MS || 900000);
     if (Number.isFinite(orderInterval) && orderInterval >= 60000) {
       setInterval(() => {
         cronModule.runScheduledSync(db, admin).catch(error => console.error('scheduled order sync:', error));
