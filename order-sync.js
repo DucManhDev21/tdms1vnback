@@ -29,11 +29,13 @@ async function settleRefund(db, admin, orderId, providerStatus, remains, reason)
     if (!orderSnap.exists) return { changed: false, refund: 0 };
     const order = orderSnap.data() || {};
     if (order.refundSettledAt) {
-      tx.update(orderRef, {
-        status: providerStatus,
-        remains,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp()
-      });
+      if (order.status !== providerStatus || Number(order.remains) !== Number(remains)) {
+        tx.update(orderRef, {
+          status: providerStatus,
+          remains,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+      }
       return { changed: false, refund: Number(order.refundAmount || 0) };
     }
 
@@ -96,22 +98,34 @@ async function syncOrderDoc(db, admin, doc, serviceMap) {
     if (provider.status === 'Canceled' || provider.status === 'Partial') {
       settlement = await settleRefund(db, admin, doc.id, provider.status, remains, provider.raw?.error || provider.raw?.message || 'Provider status');
     } else {
-      await doc.ref.update({
-        status: provider.status,
-        remains,
-        rate: Number.isFinite(fallbackRate) ? fallbackRate : Number(order.rate || 0),
-        providerRawStatus: provider.raw,
-        providerCharge: provider.charge,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp()
-      });
+      // KIỂM TRA XEM CÓ THAY ĐỔI DỮ LIỆU HAY KHÔNG TRƯỚC KHI GHI FIRESTORE
+      const statusChanged = order.status !== provider.status;
+      const remainsChanged = Number(order.remains) !== Number(remains);
+      const rateChanged = Number(order.rate) !== Number(fallbackRate);
+      const chargeChanged = Number(order.providerCharge) !== Number(provider.charge);
+
+      if (statusChanged || remainsChanged || rateChanged || chargeChanged) {
+        await doc.ref.update({
+          status: provider.status,
+          remains,
+          rate: Number.isFinite(fallbackRate) ? fallbackRate : Number(order.rate || 0),
+          providerRawStatus: provider.raw,
+          providerCharge: provider.charge,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+      } else {
+        return { updated: false, unchanged: true, status: provider.status };
+      }
     }
 
     return { updated: true, status: provider.status, refund: settlement?.refund || 0 };
   } catch (error) {
-    await doc.ref.update({
-      lastProviderError: String(error.message || 'Provider error').slice(0, 1000),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
-    });
+    if (order.lastProviderError !== String(error.message || 'Provider error').slice(0, 1000)) {
+      await doc.ref.update({
+        lastProviderError: String(error.message || 'Provider error').slice(0, 1000),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      });
+    }
     return { updated: false, error: error.message };
   }
 }

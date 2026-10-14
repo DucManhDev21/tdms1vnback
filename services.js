@@ -80,7 +80,6 @@ function normalizeService(row) {
   }
 }
 
-// ĐÃ SỬA: Bọc lót an toàn, trả về mảng rỗng [] thay vì throw Error làm sập Cron Job
 async function fetchProviderServices() {
   try {
     const data = await providerServices();
@@ -89,23 +88,6 @@ async function fetchProviderServices() {
   } catch (error) {
     console.error('fetchProviderServices error:', error?.message || error);
     return [];
-  }
-}
-
-async function persistCatalog(db, services) {
-  if (!db || !services.length) return;
-  try {
-    const chunkSize = 400;
-    for (let index = 0; index < services.length; index += chunkSize) {
-      const batch = db.batch();
-      for (const service of services.slice(index, index + chunkSize)) {
-        const ref = db.collection('service_catalog').doc(String(service.service));
-        batch.set(ref, { ...service, lastSyncedAt: new Date() }, { merge: true });
-      }
-      await batch.commit();
-    }
-  } catch (err) {
-    console.error('persistCatalog error:', err.message);
   }
 }
 
@@ -133,14 +115,12 @@ async function getServices(forceRefresh = false, db = null) {
       if (fresh.length > 0) {
         cachedServices = fresh;
         cachedAt = Date.now();
-        if (db) await persistCatalog(db, fresh);
         return fresh;
       }
       
-      // Nếu Provider bị lỗi/rỗng, tự động lấy dữ liệu lưu tạm từ Firestore Catalog
-      return await loadCatalogFallback(db);
+      return cachedServices || [];
     } catch (error) {
-      return await loadCatalogFallback(db);
+      return cachedServices || [];
     } finally {
       refreshPromise = null;
     }
@@ -150,26 +130,11 @@ async function getServices(forceRefresh = false, db = null) {
 }
 
 async function loadCatalogFallback(db) {
-  if (!db) return cachedServices || [];
-  try {
-    const snap = await db.collection('service_catalog').limit(2000).get();
-    const rows = snap.docs.map(d => d.data() || {}).filter(x => x.service != null);
-    if (rows.length) {
-      cachedServices = rows;
-      cachedAt = Date.now();
-    }
-    return rows;
-  } catch {
-    return cachedServices || [];
-  }
+  return cachedServices || [];
 }
 
 async function syncServices(db, forceRefresh = true) {
-  try {
-    return await getServices(forceRefresh, db);
-  } catch (error) {
-    return await loadCatalogFallback(db);
-  }
+  return await getServices(forceRefresh, db);
 }
 
 router.get('/', async (req, res) => {
