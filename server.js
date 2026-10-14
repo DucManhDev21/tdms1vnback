@@ -735,13 +735,13 @@ if (require.main === module) {
       console.error('Admin bootstrap:', error.message);
     }
     startAdminBot(db, admin).catch(error => console.error('Admin Telegram bot startup:', error));
-    const orderInterval = Number(process.env.ORDER_SYNC_INTERVAL_MS || 900000);
+    const orderInterval = Number(process.env.ORDER_SYNC_INTERVAL_MS || 1800000);
     if (Number.isFinite(orderInterval) && orderInterval >= 60000) {
       setInterval(() => {
         cronModule.runScheduledSync(db, admin).catch(error => console.error('scheduled order sync:', error));
       }, orderInterval).unref();
     }
-    const serviceInterval = Number(process.env.SERVICE_AUTO_SYNC_INTERVAL_MS || 900000);
+    const serviceInterval = Number(process.env.SERVICE_AUTO_SYNC_INTERVAL_MS || 3600000);
     if (Number.isFinite(serviceInterval) && serviceInterval >= 60000) {
       setInterval(() => {
         cronModule.runScheduledServiceSync(db, admin).catch(error => console.error('scheduled service sync:', error));
