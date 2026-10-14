@@ -37,6 +37,7 @@ async function getProfile(db, uid) {
   const data = snap.exists ? (snap.data() || {}) : {};
   return { email:String(data.email||''), username:String(data.username||''), name:String(data.name||'') };
 }
+
 async function createDepositAndNotify({db,admin,uid,type,amount,extra}) {
   const profile = await getProfile(db, uid);
   const depositRef = db.collection('deposits').doc();
@@ -47,27 +48,39 @@ async function createDepositAndNotify({db,admin,uid,type,amount,extra}) {
     email:profile.email, username:profile.username, name:profile.name, ...extra,
     adminNotified:false, createdAt:admin.firestore.FieldValue.serverTimestamp(), updatedAt:admin.firestore.FieldValue.serverTimestamp()
   };
+  
+  // 1. Chỉ lưu vào Firestore để trả về ngay cho client, không chờ Telegram
   await depositRef.create(base);
-  const lines = [
-    '<b>TDMS1VN — YÊU CẦU NẠP TIỀN</b>',
-    `ID: <code>${esc(depositRef.id)}</code>`,
-    `Gmail: <code>${esc(profile.email || '—')}</code>`,
-    `Username: <code>${esc(profile.username || '—')}</code>`,
-    `Mệnh giá: <b>${faceValue.toLocaleString('vi-VN')}đ</b>`,
-    type === 'card' ? `Loại thẻ: <b>${esc(extra.cardType)}</b>` : 'Phương thức: <b>Chuyển khoản ngân hàng</b>',
-    type === 'card' ? `Số Seri: <code>${esc(extra.serial)}</code>` : '',
-    type === 'card' ? `Mã thẻ: <code>${esc(extra.code)}</code>` : '',
-    type === 'card' ? `Thực nhận sau CK 30%: <b>${creditPreview.toLocaleString('vi-VN')}đ</b>` : `Thực nhận 100%: <b>${creditPreview.toLocaleString('vi-VN')}đ</b>`,
-    '',
-    'Duyệt thủ công bằng Admin Bot: /pay username số_tiền'
-  ].filter(Boolean).join('\n');
-  let notified = false, lastError = '';
-  for (let attempt=1; attempt<=3; attempt++) {
-    try { await notifyAdminTelegram(lines); notified=true; break; }
-    catch(error) { lastError=error.message; console.error(`Telegram notification attempt ${attempt}:`, error.message); if(attempt<3) await new Promise(r=>setTimeout(r,1000*attempt)); }
-  }
-  await depositRef.update({ adminNotified:notified, adminNotificationError:notified?admin.firestore.FieldValue.delete():lastError, updatedAt:admin.firestore.FieldValue.serverTimestamp() });
-  return { id:depositRef.id, adminNotified:notified };
+
+  // 2. Tách việc gửi thông báo Telegram chạy ngầm bất đồng bộ phía sau
+  (async () => {
+    try {
+      const lines = [
+        '<b>TDMS1VN — YÊU CẦU NẠP TIỀN</b>',
+        `ID: <code>${esc(depositRef.id)}</code>`,
+        `Gmail: <code>${esc(profile.email || '—')}</code>`,
+        `Username: <code>${esc(profile.username || '—')}</code>`,
+        `Mệnh giá: <b>${faceValue.toLocaleString('vi-VN')}đ</b>`,
+        type === 'card' ? `Loại thẻ: <b>${esc(extra.cardType)}</b>` : 'Phương thức: <b>Chuyển khoản ngân hàng</b>',
+        type === 'card' ? `Số Seri: <code>${esc(extra.serial)}</code>` : '',
+        type === 'card' ? `Mã thẻ: <code>${esc(extra.code)}</code>` : '',
+        type === 'card' ? `Thực nhận sau CK 30%: <b>${creditPreview.toLocaleString('vi-VN')}đ</b>` : `Thực nhận 100%: <b>${creditPreview.toLocaleString('vi-VN')}đ</b>`,
+        '',
+        'Duyệt thủ công bằng Admin Bot: /pay username số_tiền'
+      ].filter(Boolean).join('\n');
+
+      let notified = false, lastError = '';
+      for (let attempt=1; attempt<=3; attempt++) {
+        try { await notifyAdminTelegram(lines); notified=true; break; }
+        catch(error) { lastError=error.message; console.error(`Telegram notification attempt ${attempt}:`, error.message); if(attempt<3) await new Promise(r=>setTimeout(r,1000*attempt)); }
+      }
+      await depositRef.update({ adminNotified:notified, adminNotificationError:notified?admin.firestore.FieldValue.delete():lastError, updatedAt:admin.firestore.FieldValue.serverTimestamp() });
+    } catch (err) {
+      console.error('Background telegram error:', err);
+    }
+  })();
+
+  return { id:depositRef.id, adminNotified:false };
 }
 
 router.post('/cards', requireUser, async (req,res) => {

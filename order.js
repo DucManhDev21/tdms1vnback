@@ -18,7 +18,6 @@ function parseProviderOrderId(data) {
   return value == null ? '' : String(value);
 }
 
-// Bọc gọi Provider với timeout 12 giây để chống treo server
 async function createProviderOrderWithTimeout({ serviceId, link, quantity }) {
   const timeoutPromise = new Promise((_, reject) => {
     setTimeout(() => reject(new Error('Provider phản hồi quá chậm (Timeout 12s)')), 12000);
@@ -133,31 +132,47 @@ router.post('/', requireUser, async (req, res) => {
 
     if (result.duplicate) return res.status(200).json({ ok: true, duplicate: true, orderId: result.orderId });
 
-    try {
-      const providerOrderId = await createProviderOrderWithTimeout({ serviceId: parsedServiceId, link: String(link).trim(), quantity: parsedQuantity });
-      await db.collection('orders').doc(result.orderId).update({ providerOrderId, status: 'Pending', providerCallCompletedAt: admin.firestore.FieldValue.serverTimestamp(), updatedAt: admin.firestore.FieldValue.serverTimestamp() });
-      return res.status(201).json({ ok: true, orderId: result.orderId, providerOrderId, totalPrice });
-    } catch (providerError) {
-      // Hoàn tiền tự động khi Provider lỗi hoặc quá thời gian chờ
-      const orderRef = db.collection('orders').doc(result.orderId);
-      await db.runTransaction(async tx => {
-        const orderSnap = await tx.get(orderRef);
-        if (!orderSnap.exists || orderSnap.data()?.refundSettledAt) return;
-        const order = orderSnap.data() || {};
-        const userRef = db.collection('users').doc(uid);
-        const userSnap = await tx.get(userRef);
-        if (!userSnap.exists) throw new Error('Không tìm thấy tài khoản để hoàn tiền');
-        const oldBalance = Number(userSnap.data()?.balance || 0);
-        const refund = roundMoney(Number(order.totalPrice || 0));
-        const newBalance = roundMoney(oldBalance + refund);
-        tx.update(userRef, { balance: newBalance, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
-        tx.update(orderRef, { status: 'Canceled', remains: Number(order.quantity || 0), providerError: true, refundAmount: refund, refundSettledAt: admin.firestore.FieldValue.serverTimestamp(), cancelReason: String(providerError.message || 'Provider error').slice(0, 500), updatedAt: admin.firestore.FieldValue.serverTimestamp() });
-        const logRef = db.collection('balance_logs').doc();
-        tx.set(logRef, { uid, amount: refund, type: 'credit', reason: `Hoàn tiền đơn ${result.orderId}: Provider error`, oldBalance, newBalance, orderId: result.orderId, createdAt: admin.firestore.FieldValue.serverTimestamp() });
-      });
-      return res.status(502).json({ error: 'Provider lỗi hoặc phản hồi chậm, hệ thống đã hoàn tiền tự động', refunded: true, orderId: result.orderId });
-    }
+    // PHẢN HỒI NGAY LẬP TỨC CHO CLIENT ĐỂ KHÔNG KẸT GIAO DIỆN
+    res.status(201).json({ ok: true, orderId: result.orderId, totalPrice });
+
+    // CHẠY NGẦM VIỆC ĐẨY ĐƠN SANG PROVIDER PHÍA SAU SERVER
+    (async () => {
+      try {
+        const providerOrderId = await createProviderOrderWithTimeout({ serviceId: parsedServiceId, link: String(link).trim(), quantity: parsedQuantity });
+        await db.collection('orders').doc(result.orderId).update({ 
+          providerOrderId, 
+          status: 'Pending', 
+          providerCallCompletedAt: admin.firestore.FieldValue.serverTimestamp(), 
+          updatedAt: admin.firestore.FieldValue.serverTimestamp() 
+        });
+      } catch (providerError) {
+        console.error('Background Provider error:', providerError.message);
+        const orderRef = db.collection('orders').doc(result.orderId);
+        try {
+          await db.runTransaction(async tx => {
+            const orderSnap = await tx.get(orderRef);
+            if (!orderSnap.exists || orderSnap.data()?.refundSettledAt) return;
+            const order = orderSnap.data() || {};
+            const userRef = db.collection('users').doc(uid);
+            const userSnap = await tx.get(userRef);
+            if (!userSnap.exists) return;
+            const oldBalance = Number(userSnap.data()?.balance || 0);
+            const refund = roundMoney(Number(order.totalPrice || 0));
+            const newBalance = roundMoney(oldBalance + refund);
+            tx.update(userRef, { balance: newBalance, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+            tx.update(orderRef, { status: 'Canceled', remains: Number(order.quantity || 0), providerError: true, refundAmount: refund, refundSettledAt: admin.firestore.FieldValue.serverTimestamp(), cancelReason: String(providerError.message || 'Provider error').slice(0, 500), updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+            const logRef = db.collection('balance_logs').doc();
+            tx.set(logRef, { uid, amount: refund, type: 'credit', reason: `Hoàn tiền đơn ${result.orderId}: Provider error`, oldBalance, newBalance, orderId: result.orderId, createdAt: admin.firestore.FieldValue.serverTimestamp() });
+          });
+        } catch (bgRefundErr) {
+          console.error('Background refund failed:', bgRefundErr);
+        }
+      }
+    })();
+    return;
+
   } catch (error) {
+    if (res.headersSent) return;
     if (error.code === 'INSUFFICIENT_BALANCE') return res.status(400).json({ error: 'Số dư không đủ' });
     if (error.code === 'USER_NOT_FOUND') return res.status(404).json({ error: 'Tài khoản chưa được khởi tạo' });
     console.error('order create:', error);
