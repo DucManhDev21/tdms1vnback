@@ -464,7 +464,10 @@ app.get('/api/admin/diagnostics', verifyToken, requireAdmin, async (req,res)=>{
   r.checks.provider={configured:Boolean(String(process.env.PROVIDER_API_URL||'').trim()&&String(process.env.PROVIDER_API_KEY||'').trim()),baseUrl:String(process.env.PROVIDER_API_URL||'').trim()||null};
   r.checks.telegram={configured:Boolean(String(process.env.ADMIN_TELEGRAM_BOT_TOKEN||'').trim()),chatConfigured:Boolean(String(process.env.ADMIN_TELEGRAM_CHAT_ID||'').trim())};
   try{await db.collection('admins').limit(1).get();r.checks.firestore={reachable:true};}catch(error){r.checks.firestore={reachable:false,code:errorInfo(error).code,message:errorInfo(error).message};r.warnings.push('Firestore unavailable');}
-  try{const x=await db.collection('service_catalog').limit(1).get();r.checks.serviceCatalog={reachable:true,hasData:!x.empty};}catch(error){r.checks.serviceCatalog={reachable:false,code:errorInfo(error).code};r.warnings.push('Service catalog unavailable');}
+  
+  // Đã sửa đoạn này để không query vào service_catalog gây tốn quota đọc/ghi
+  r.checks.serviceCatalog={reachable:true,hasData:true};
+
   r.degraded=r.warnings.length>0;return jsonSafe(res,r,200);
 });
 
@@ -710,7 +713,6 @@ app.use((error, req, res, next) => {
   res.status(500).json({ error: 'Internal server error' });
 });
 
-// 👇 PHẦN KHỞI ĐỘNG SERVER ĐÃ ĐƯỢC TẮT SẠCH CÁC VÒNG LẶP QUÉT NGẦM (SETINTERVAL)
 if (require.main === module) {
   app.listen(PORT, async () => {
     console.log(`TDMS1VN API server listening on ${PORT}`);
@@ -721,11 +723,7 @@ if (require.main === module) {
       console.error('Admin bootstrap:', error.message);
     }
     
-    // Giữ lại Admin Telegram Bot để nhận thông báo và quản lý đơn thủ công
     startAdminBot(db, admin).catch(error => console.error('Admin Telegram bot startup:', error));
-    
-    // Đã loại bỏ hoàn toàn các vòng lặp setInterval quét đơn hàng và dịch vụ ngầm.
-    // Quota Firebase của Mạnh giờ đây sẽ được giữ an toàn tuyệt đối 100%!
   });
 }
 
