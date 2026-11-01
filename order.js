@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const router = express.Router();
 const { getServices } = require('./services');
 const { calculateTotal, roundMoney } = require('./pricing');
+const { assertUsable, voucherError, normalizeCode, CODE_RE } = require('./vouchers');
 
 function requireUser(req, res, next) {
   return req.app.locals.verifyToken(req, res, next);
@@ -41,7 +42,7 @@ router.post('/', requireUser, async (req, res) => {
   const admin = req.app.locals.admin;
   const uid = req.user.uid;
   const idem = requestId(req);
-  const { serviceId, link, quantity } = req.body || {};
+  const { serviceId, link, quantity, voucherCode } = req.body || {};
 
   const parsedServiceId = Number.parseInt(serviceId, 10);
   const parsedQuantity = Number.parseInt(quantity, 10);
@@ -76,10 +77,27 @@ router.post('/', requireUser, async (req, res) => {
       if (!userSnap.exists) throw Object.assign(new Error('User not found'), { code: 'USER_NOT_FOUND' });
       const user = userSnap.data();
       const oldBalance = Number(user.balance || 0);
-      if (oldBalance < totalPrice) throw Object.assign(new Error('Số dư không đủ'), { code: 'INSUFFICIENT_BALANCE' });
+      // Voucher: đọc hết trước khi ghi (yêu cầu của Firestore transaction)
+      const code = voucherCode ? normalizeCode(voucherCode) : '';
+      let discountAmount = 0;
+      let vRef = null;
+      let useRef = null;
+      if (code) {
+        if (!CODE_RE.test(code)) throw voucherError('Mã giảm giá không hợp lệ.');
+        vRef = db.collection('vouchers').doc(code);
+        useRef = db.collection('voucher_uses').doc(`${code}_${uid}`);
+        const vSnap = await tx.get(vRef);
+        const useSnap = await tx.get(useRef);
+        const voucher = vSnap.exists ? vSnap.data() : null;
+        assertUsable(voucher);
+        if (useSnap.exists) throw voucherError('Bạn đã sử dụng mã này rồi.');
+        discountAmount = roundMoney(totalPrice * Number(voucher.percent) / 100);
+      }
+      const chargedTotal = roundMoney(totalPrice - discountAmount);
+      if (oldBalance < chargedTotal) throw Object.assign(new Error('Số dư không đủ'), { code: 'INSUFFICIENT_BALANCE' });
 
       const orderRef = db.collection('orders').doc();
-      const newBalance = oldBalance - totalPrice;
+      const newBalance = oldBalance - chargedTotal;
       tx.update(userRef, { balance: newBalance });
       tx.set(orderRef, {
         uid,
@@ -92,7 +110,10 @@ router.post('/', requireUser, async (req, res) => {
         type: service.type,
         link: String(link).trim(),
         quantity: parsedQuantity,
-        totalPrice,
+        totalPrice: chargedTotal,
+        originalPrice: totalPrice,
+        discountAmount,
+        voucherCode: code,
         rate,
         unitRateVnd: rate,
         providerRate: service.providerRate ?? null,
@@ -114,7 +135,7 @@ router.post('/', requireUser, async (req, res) => {
       const logRef = db.collection('balance_logs').doc();
       tx.set(logRef, {
         uid,
-        amount: -totalPrice,
+        amount: -chargedTotal,
         type: 'debit',
         reason: `Đặt đơn ${orderRef.id}`,
         oldBalance,
@@ -127,13 +148,17 @@ router.post('/', requireUser, async (req, res) => {
         orderId: orderRef.id,
         createdAt: admin.firestore.FieldValue.serverTimestamp()
       });
-      return { duplicate: false, orderId: orderRef.id };
+      if (vRef) {
+        tx.update(vRef, { usedCount: admin.firestore.FieldValue.increment(1), updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+        tx.set(useRef, { uid, code, orderId: orderRef.id, createdAt: admin.firestore.FieldValue.serverTimestamp() });
+      }
+      return { duplicate: false, orderId: orderRef.id, totalPrice: chargedTotal, discountAmount };
     });
 
     if (result.duplicate) return res.status(200).json({ ok: true, duplicate: true, orderId: result.orderId });
 
     // PHẢN HỒI NGAY LẬP TỨC CHO CLIENT ĐỂ KHÔNG KẸT GIAO DIỆN
-    res.status(201).json({ ok: true, orderId: result.orderId, totalPrice });
+    res.status(201).json({ ok: true, orderId: result.orderId, totalPrice: result.totalPrice, discountAmount: result.discountAmount });
 
     // CHẠY NGẦM VIỆC ĐẨY ĐƠN SANG PROVIDER PHÍA SAU SERVER
     (async () => {
@@ -173,6 +198,7 @@ router.post('/', requireUser, async (req, res) => {
 
   } catch (error) {
     if (res.headersSent) return;
+    if (error.code === 'VOUCHER_INVALID') return res.status(400).json({ error: error.message });
     if (error.code === 'INSUFFICIENT_BALANCE') return res.status(400).json({ error: 'Số dư không đủ' });
     if (error.code === 'USER_NOT_FOUND') return res.status(404).json({ error: 'Tài khoản chưa được khởi tạo' });
     console.error('order create:', error);

@@ -2,6 +2,7 @@ const axios = require('axios');
 const { syncOrders } = require('./order-sync');
 const { syncServices } = require('./services');
 const { addAdmin, deleteAdmin, listAdmins, validateEmail, ownerEmail } = require('./admins');
+const { parseThemCode, createVoucher } = require('./vouchers');
 
 let started = false;
 let offset = 0;
@@ -312,7 +313,7 @@ async function deletePopup(db,id) {
 }
 
 async function sendHelp(chatId) {
-  return telegram('sendMessage',{chat_id:chatId,text:'<b>TDMS1VN V10 ADMIN BOT</b>\n\n/approve ID_ĐƠN [Số_tiền]\n/reject ID_ĐƠN [Lý_do]\n/pay username số_tiền\n/take username số_tiền\n/syncorders\n/syncservices\n/stats\n/addpopup ID | Tiêu đề | Nội dung\n/deletepopup ID\n/addadmin email@gmail.com\n/deleteadmin email@gmail.com\n/listadmin\n/help\n\nVí dụ:\n/approve abc123xyz\n/reject abc123xyz Thẻ sai seri\n/pay hung123 50000',parse_mode:'HTML'});
+  return telegram('sendMessage',{chat_id:chatId,text:'<b>TDMS1VN V10 ADMIN BOT</b>\n\n/approve ID_ĐƠN [Số_tiền]\n/reject ID_ĐƠN [Lý_do]\n/pay username số_tiền\n/take username số_tiền\n/themcode CODE % lượt_dùng số_ngày\n/syncorders\n/syncservices\n/stats\n/addpopup ID | Tiêu đề | Nội dung\n/deletepopup ID\n/addadmin email@gmail.com\n/deleteadmin email@gmail.com\n/listadmin\n/help\n\nVí dụ:\n/approve abc123xyz\n/reject abc123xyz Thẻ sai seri\n/pay hung123 50000',parse_mode:'HTML'});
 }
 
 async function handleMessage(message,db,admin) {
@@ -329,6 +330,11 @@ async function handleMessage(message,db,admin) {
     const email=parseAdminEmail(text,'/deleteadmin');
     const deleted=await deleteAdmin(db,admin,email,{source:'telegram',telegramUserId:String(message?.from?.id||''),telegramUsername:String(message?.from?.username||'')});
     return telegram('sendMessage',{chat_id:chatId,text:`🗑️ <b>ĐÃ XÓA ADMIN</b>\n\n📧 <code>${esc(deleted)}</code>\n\nQuyền Admin sẽ không còn hiệu lực ở lần kiểm tra phiên tiếp theo.`,parse_mode:'HTML'});
+  }
+  if(command==='/themcode'){
+    const data=parseThemCode(text);
+    const r=await createVoucher(db,admin,data,String(message?.from?.username||message?.from?.id||''));
+    return telegram('sendMessage',{chat_id:chatId,text:`🎟️ <b>ĐÃ TẠO MÃ GIẢM GIÁ</b>\n\n🔑 Mã: <code>${esc(r.code)}</code>\n📉 Giảm: <b>${r.percent}%</b>\n🔢 Lượt dùng: <b>${r.maxUses}</b>\n📅 Hạn: <b>${r.days} ngày</b> (đến ${esc(r.expiresAt.toLocaleString('vi-VN',{timeZone:'Asia/Ho_Chi_Minh'}))})\n\nMỗi tài khoản chỉ dùng được 1 lần.`,parse_mode:'HTML'});
   }
   if(command==='/approve'){
     const {depositId, customAmount}=parseApprove(text);
