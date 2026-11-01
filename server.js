@@ -14,7 +14,7 @@ const servicesModule = require('./services');
 const { getPricingOverrides, parseMarkup, roundMoney } = require('./pricing');
 const depositRouter = require('./deposit');
 const voucherRouter = require('./vouchers').router;
-const { startAdminBot } = require('./admin-bot');
+const { startAdminBot, handleWebhookUpdate } = require('./admin-bot');
 const { ensureOwnerAdmin, isAdmin, listAdmins, addAdmin, deleteAdmin } = require('./admins');
 const { providerConfig, providerServices } = require('./provider');
 
@@ -98,6 +98,18 @@ app.use(cors({
 app.use(express.json({ limit: '256kb' }));
 app.use(express.urlencoded({ extended: false, limit: '256kb' }));
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
+
+// Telegram gửi lệnh về đây (webhook). Dùng được trên Vercel serverless.
+app.post('/api/telegram/webhook', async (req, res) => {
+  const expected = String(process.env.TELEGRAM_WEBHOOK_SECRET || '').trim();
+  if (!expected || req.get('X-Telegram-Bot-Api-Secret-Token') !== expected) return res.status(401).end();
+  try {
+    await handleWebhookUpdate(req.body || {}, db, admin);
+  } catch (error) {
+    console.error('Telegram webhook:', error);
+  }
+  res.status(200).end();
+});
 
 const publicLimiter = rateLimit({
   windowMs: 60 * 1000,

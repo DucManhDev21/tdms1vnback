@@ -392,6 +392,7 @@ async function handleUpdate(update,db,admin){
 
 async function startAdminBot(db,admin){
   if(started)return;
+  if(String(process.env.TELEGRAM_MODE||'').trim()==='webhook'){console.log('Admin Telegram bot dùng webhook, tắt polling.');return;}
   if(!String(process.env.ADMIN_TELEGRAM_BOT_TOKEN||'').trim()){console.log('Admin Telegram bot disabled: ADMIN_TELEGRAM_BOT_TOKEN is not configured');return;}
   started=true;
   try{
@@ -419,4 +420,5 @@ async function startAdminBot(db,admin){
   }catch(error){started=false;console.error('Admin Telegram startup failed:',error.response?.data||error.message);}
 }
 
-module.exports={startAdminBot,parsePay,parseTake,parseAddPopup,parseDeletePopup};
+async function handleWebhookUpdate(update,db,admin){ return handleUpdate(update,db,admin); }
+module.exports={startAdminBot,handleWebhookUpdate,parsePay,parseTake,parseAddPopup,parseDeletePopup};
