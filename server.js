@@ -100,6 +100,17 @@ app.use(express.urlencoded({ extended: false, limit: '256kb' }));
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 
 // Telegram gửi lệnh về đây (webhook). Dùng được trên Vercel serverless.
+app.get('/api/announcements', async (req, res) => {
+  try {
+    const snap = await db.collection('announcements').where('active', '==', true).limit(20).get();
+    res.set('Cache-Control', 'no-store');
+    res.json({ items: snap.docs.map(d => ({ id: d.id, content: String(d.data().content || '') })) });
+  } catch (error) {
+    console.error('announcements:', error);
+    res.json({ items: [] });
+  }
+});
+
 app.post('/api/telegram/webhook', async (req, res) => {
   const expected = String(process.env.TELEGRAM_WEBHOOK_SECRET || '').trim();
   if (!expected || req.get('X-Telegram-Bot-Api-Secret-Token') !== expected) return res.status(401).end();

@@ -2,7 +2,7 @@ const axios = require('axios');
 const { syncOrders } = require('./order-sync');
 const { syncServices } = require('./services');
 const { addAdmin, deleteAdmin, listAdmins, validateEmail, ownerEmail } = require('./admins');
-const { parseThemCode, createVoucher } = require('./vouchers');
+const { parseThemCode, createVoucher, normalizeCode, CODE_RE } = require('./vouchers');
 
 let started = false;
 let offset = 0;
@@ -313,7 +313,7 @@ async function deletePopup(db,id) {
 }
 
 async function sendHelp(chatId) {
-  return telegram('sendMessage',{chat_id:chatId,text:'<b>TDMS1VN V10 ADMIN BOT</b>\n\n/approve ID_ĐƠN [Số_tiền]\n/reject ID_ĐƠN [Lý_do]\n/pay username số_tiền\n/take username số_tiền\n/themcode CODE % lượt_dùng số_ngày\n/syncorders\n/syncservices\n/stats\n/addpopup ID | Tiêu đề | Nội dung\n/deletepopup ID\n/addadmin email@gmail.com\n/deleteadmin email@gmail.com\n/listadmin\n/help\n\nVí dụ:\n/approve abc123xyz\n/reject abc123xyz Thẻ sai seri\n/pay hung123 50000',parse_mode:'HTML'});
+  return telegram('sendMessage',{chat_id:chatId,text:'<b>TDMS1VN V10 ADMIN BOT</b>\n\n/approve ID_ĐƠN [Số_tiền]\n/reject ID_ĐƠN [Lý_do]\n/pay username số_tiền\n/take username số_tiền\n/themcode CODE % lượt_dùng số_ngày\n/xoacode CODE\n/themtieude ID nội_dung\n/xoatieude ID\n/syncorders\n/syncservices\n/stats\n/addpopup ID | Tiêu đề | Nội dung\n/deletepopup ID\n/addadmin email@gmail.com\n/deleteadmin email@gmail.com\n/listadmin\n/help\n\nVí dụ:\n/approve abc123xyz\n/reject abc123xyz Thẻ sai seri\n/pay hung123 50000',parse_mode:'HTML'});
 }
 
 async function handleMessage(message,db,admin) {
@@ -330,6 +330,31 @@ async function handleMessage(message,db,admin) {
     const email=parseAdminEmail(text,'/deleteadmin');
     const deleted=await deleteAdmin(db,admin,email,{source:'telegram',telegramUserId:String(message?.from?.id||''),telegramUsername:String(message?.from?.username||'')});
     return telegram('sendMessage',{chat_id:chatId,text:`🗑️ <b>ĐÃ XÓA ADMIN</b>\n\n📧 <code>${esc(deleted)}</code>\n\nQuyền Admin sẽ không còn hiệu lực ở lần kiểm tra phiên tiếp theo.`,parse_mode:'HTML'});
+  }
+  if(command==='/xoacode'){
+    const code=normalizeCode(text.trim().split(/\s+/)[1]);
+    if(!CODE_RE.test(code)) return telegram('sendMessage',{chat_id:chatId,text:'Cú pháp: /xoacode CODE\nVí dụ: /xoacode SALE20',parse_mode:'HTML'});
+    const ref=db.collection('vouchers').doc(code);
+    const snap=await ref.get();
+    if(!snap.exists) return telegram('sendMessage',{chat_id:chatId,text:`❌ Không tìm thấy mã <code>${esc(code)}</code>`,parse_mode:'HTML'});
+    await ref.delete();
+    return telegram('sendMessage',{chat_id:chatId,text:`🗑️ Đã xóa mã <code>${esc(code)}</code>`,parse_mode:'HTML'});
+  }
+  if(command==='/themtieude'){
+    const m=text.trim().match(/^\S+\s+(\S+)\s+([\s\S]+)$/);
+    if(!m || !/^[A-Za-z0-9_-]{1,40}$/.test(m[1])) return telegram('sendMessage',{chat_id:chatId,text:'Cú pháp: /themtieude ID nội dung\nID chỉ gồm chữ, số, _ hoặc - (tối đa 40 ký tự)',parse_mode:'HTML'});
+    const id=m[1]; const content=m[2].trim().slice(0,300);
+    await db.collection('announcements').doc(id).set({id,content,active:true,updatedAt:admin.firestore.FieldValue.serverTimestamp()},{merge:true});
+    return telegram('sendMessage',{chat_id:chatId,text:`📢 Đã lưu tiêu đề <code>${esc(id)}</code>:\n${esc(content)}`,parse_mode:'HTML'});
+  }
+  if(command==='/xoatieude'){
+    const m=text.trim().match(/^\S+\s+(\S+)$/);
+    if(!m) return telegram('sendMessage',{chat_id:chatId,text:'Cú pháp: /xoatieude ID',parse_mode:'HTML'});
+    const ref=db.collection('announcements').doc(m[1]);
+    const snap=await ref.get();
+    if(!snap.exists) return telegram('sendMessage',{chat_id:chatId,text:`❌ Không tìm thấy tiêu đề <code>${esc(m[1])}</code>`,parse_mode:'HTML'});
+    await ref.delete();
+    return telegram('sendMessage',{chat_id:chatId,text:`🗑️ Đã xóa tiêu đề <code>${esc(m[1])}</code>`,parse_mode:'HTML'});
   }
   if(command==='/themcode'){
     const data=parseThemCode(text);
