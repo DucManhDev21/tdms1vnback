@@ -718,11 +718,76 @@ app.get('/api/balance-logs', verifyToken, async (req, res) => {
   }
 });
 
+const telegramLink = require('./telegramLink');
+
+app.post('/api/account/telegram-keys', verifyToken, async (req, res) => {
+  try {
+    const key = await telegramLink.createLinkKey(db, admin, req.user.uid);
+    res.json({ key });
+  } catch (error) {
+    console.error('telegram keys:', error);
+    res.status(500).json({ error: 'Không tạo được mã liên kết' });
+  }
+});
+
+app.get('/api/account/telegram', verifyToken, async (req, res) => {
+  try {
+    res.json(await telegramLink.getLinkStatus(db, req.user.uid));
+  } catch (error) {
+    console.error('telegram status:', error);
+    res.status(500).json({ error: 'Không lấy được trạng thái liên kết' });
+  }
+});
+
+app.post('/api/account/telegram/unlink', verifyToken, async (req, res) => {
+  try {
+    await telegramLink.unlinkAccount(db, admin, req.user.uid);
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('telegram unlink:', error);
+    res.status(500).json({ error: 'Không gỡ được liên kết' });
+  }
+});
+
+app.get('/api/account/devices', verifyToken, async (req, res) => {
+  try {
+    const user = (await db.collection('users').doc(req.user.uid).get()).data() || {};
+    res.json({ pending: telegramLink.pendingView(user) });
+  } catch (error) {
+    console.error('devices:', error);
+    res.status(500).json({ error: 'Không tải được danh sách thiết bị' });
+  }
+});
+
+app.post('/api/account/devices/:id', verifyToken, async (req, res) => {
+  const id = String(req.params.id || '');
+  const action = String(req.body?.action || '');
+  if (!/^[a-f0-9]{16}$/.test(id)) return res.status(400).json({ error: 'Thiết bị không hợp lệ' });
+  try {
+    if (action === 'trust') {
+      const label = await telegramLink.trustDevice(db, req.user.uid, id);
+      if (!label) return res.status(404).json({ error: 'Thiết bị này đã được xử lý' });
+      await telegramLink.notifyUser(db, req.user.uid, `✅ Đã xác nhận ${label} là thiết bị của bạn (từ web).`).catch(() => {});
+      return res.json({ ok: true });
+    }
+    if (action === 'lock') {
+      const result = await telegramLink.lockAccount(db, admin, req.user.uid);
+      return res.json({ ok: true, resetLink: result.resetLink });
+    }
+    return res.status(400).json({ error: 'Hành động không hợp lệ' });
+  } catch (error) {
+    console.error('device action:', error);
+    res.status(500).json({ error: 'Không xử lý được thiết bị' });
+  }
+});
+
 app.get('/api/me', verifyToken, async (req, res) => {
   try {
     const snap = await db.collection('users').doc(req.user.uid).get();
     if (!snap.exists) return res.status(404).json({ error: 'Tài khoản chưa được khởi tạo' });
-    res.json({ uid: req.user.uid, user: snap.data() });
+    const user = snap.data() || {};
+    telegramLink.checkDevice(db, admin, req.user.uid, req.get('user-agent'), user).catch(e => console.error('device check:', e.message));
+    res.json({ uid: req.user.uid, user });
   } catch (error) {
     console.error('me:', error);
     res.status(500).json({ error: 'Không thể lấy thông tin tài khoản' });

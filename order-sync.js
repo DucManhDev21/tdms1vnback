@@ -1,4 +1,5 @@
 const { providerStatus: providerStatusRequest } = require('./provider');
+const { notifyOrderStatus } = require('./telegramLink');
 const { getServices } = require('./services');
 const { roundMoney } = require('./pricing');
 
@@ -118,6 +119,9 @@ async function syncOrderDoc(db, admin, doc, serviceMap) {
       }
     }
 
+    if (order.status !== provider.status && ['Completed', 'Canceled', 'Partial'].includes(provider.status)) {
+      notifyOrderStatus(db, order.uid, doc.id, order.serviceName, provider.status, settlement?.refund || 0).catch(() => {});
+    }
     return { updated: true, status: provider.status, refund: settlement?.refund || 0 };
   } catch (error) {
     if (order.lastProviderError !== String(error.message || 'Provider error').slice(0, 1000)) {

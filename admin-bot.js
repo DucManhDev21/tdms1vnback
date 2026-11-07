@@ -3,6 +3,7 @@ const { syncOrders } = require('./order-sync');
 const { syncServices } = require('./services');
 const { addAdmin, deleteAdmin, listAdmins, validateEmail, ownerEmail } = require('./admins');
 const { parseThemCode, createVoucher, normalizeCode, CODE_RE } = require('./vouchers');
+const { handleCustomerCommand, notifyDepositApproved, handleDeviceCallback } = require('./telegramLink');
 
 let started = false;
 let offset = 0;
@@ -166,7 +167,7 @@ async function findUserByUsername(db, username) {
 }
 
 // Duyệt Đơn Theo ID -> Trạng thái: "Thành công"
-async function approveDeposit(db, admin, depositId, customAmount) {
+async function approveDepositCore(db, admin, depositId, customAmount) {
   const depositRef = db.collection('deposits').doc(depositId);
   const depositSnap = await depositRef.get();
   if (!depositSnap.exists) throw new Error(`Không tìm thấy đơn nạp ID: ${depositId}`);
@@ -401,8 +402,10 @@ async function handleMessage(message,db,admin) {
 }
 
 async function handleUpdate(update,db,admin){
+  if(update?.callback_query){ try{ await handleDeviceCallback(update.callback_query,db,admin); }catch(error){ console.error('Device callback:',error); } return; }
   if(!update?.message)return;
   const chatId=String(update.message.chat?.id||'');
+  try{ if(await handleCustomerCommand(update.message,db,admin)) return; }catch(error){ console.error('Customer command:',error); }
   if(!isAuthorized(update)){
     if(chatId)await telegram('sendMessage',{chat_id:chatId,text:'⛔ Bạn không có quyền sử dụng bot admin.'}).catch(()=>{});
     return;
@@ -426,7 +429,7 @@ async function startAdminBot(db,admin){
     offset=0;
     while(started){
       try{
-        const updates=await telegram('getUpdates',{offset,timeout:25,allowed_updates:['message']});
+        const updates=await telegram('getUpdates',{offset,timeout:25,allowed_updates:['message','callback_query']});
         for(const u of updates||[]){
           offset=Number(u.update_id)+1;
           await handleUpdate(u,db,admin);
@@ -446,4 +449,13 @@ async function startAdminBot(db,admin){
 }
 
 async function handleWebhookUpdate(update,db,admin){ return handleUpdate(update,db,admin); }
+async function approveDeposit(db, admin, depositId, customAmount) {
+  const result = await approveDepositCore(db, admin, depositId, customAmount);
+  try {
+    const d = (await db.collection('deposits').doc(depositId).get()).data() || {};
+    await notifyDepositApproved(db, d.uid, customAmount || Number(d.creditedAmount || d.amount || 0));
+  } catch (error) { console.error('Notify deposit:', error.message); }
+  return result;
+}
+
 module.exports={startAdminBot,handleWebhookUpdate,parsePay,parseTake,parseAddPopup,parseDeletePopup};
