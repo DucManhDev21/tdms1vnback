@@ -95,7 +95,7 @@ app.use(cors({
   maxAge: 86400
 }));
 
-app.use(express.json({ limit: '256kb' }));
+app.use(express.json({ limit: '256kb', verify: (req, res, buf) => { req.rawBody = buf; } }));
 app.use(express.urlencoded({ extended: false, limit: '256kb' }));
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 
@@ -719,6 +719,7 @@ app.get('/api/balance-logs', verifyToken, async (req, res) => {
 });
 
 const telegramLink = require('./telegramLink');
+const discordBot = require('./discordBot');
 
 app.post('/api/account/telegram-keys', verifyToken, async (req, res) => {
   try {
@@ -746,6 +747,49 @@ app.post('/api/account/telegram/unlink', verifyToken, async (req, res) => {
   } catch (error) {
     console.error('telegram unlink:', error);
     res.status(500).json({ error: 'Không gỡ được liên kết' });
+  }
+});
+
+app.post('/api/discord/interactions', async (req, res) => {
+  if (!discordBot.verifySignature(req)) return res.status(401).end();
+  try {
+    res.json(await discordBot.handleInteraction(req.body, db, admin));
+  } catch (error) {
+    console.error('discord interaction:', error);
+    res.json(discordBot.reply('Có lỗi, thử lại sau.'));
+  }
+});
+
+app.get('/api/bot-links', async (req, res) => {
+  try {
+    const d = (await db.collection('config').doc('bot_links').get()).data() || {};
+    res.set('Cache-Control', 'no-store');
+    res.json({ telegramUrl: d.telegramUrl || '', discordUrl: d.discordUrl || '' });
+  } catch (error) {
+    console.error('bot-links:', error);
+    res.json({ telegramUrl: '', discordUrl: '' });
+  }
+});
+
+app.get('/api/notifications', verifyToken, async (req, res) => {
+  try {
+    const snap = await db.collection('notifications').orderBy('createdAt', 'desc').limit(30).get();
+    res.set('Cache-Control', 'no-store');
+    res.json({
+      items: snap.docs.map(d => {
+        const x = d.data();
+        return {
+          id: d.id,
+          type: x.type || '',
+          title: x.title || '',
+          body: x.body || '',
+          createdAt: x.createdAt?.toDate ? x.createdAt.toDate().toISOString() : null
+        };
+      })
+    });
+  } catch (error) {
+    console.error('notifications:', error);
+    res.status(500).json({ error: 'Không tải được thông báo' });
   }
 });
 

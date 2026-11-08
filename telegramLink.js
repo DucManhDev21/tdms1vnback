@@ -1,5 +1,6 @@
 const axios = require('axios');
 const crypto = require('crypto');
+const { sendDiscordDM } = require('./discordBot');
 
 const KEY_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const KEY_RE = /^TDMS-[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}$/;
@@ -53,6 +54,7 @@ async function getLinkStatus(db, uid) {
   return {
     linked: Boolean(user.telegramChatId),
     linkedAt: user.telegramLinkedAt ? new Date(toMs(user.telegramLinkedAt)).toISOString() : null,
+    discordLinked: Boolean(user.discordUserId),
     hasKey: Boolean(user.tgKeyHash)
   };
 }
@@ -60,7 +62,9 @@ async function getLinkStatus(db, uid) {
 async function unlinkAccount(db, admin, uid) {
   await db.collection('users').doc(uid).set({
     telegramChatId: admin.firestore.FieldValue.delete(),
-    telegramLinkedAt: admin.firestore.FieldValue.delete()
+    telegramLinkedAt: admin.firestore.FieldValue.delete(),
+    discordUserId: admin.firestore.FieldValue.delete(),
+    discordLinkedAt: admin.firestore.FieldValue.delete()
   }, { merge: true });
 }
 
@@ -172,6 +176,7 @@ async function notifyUser(db, uid, text) {
   if (!uid) return;
   const user = (await db.collection('users').doc(String(uid)).get()).data() || {};
   if (user.telegramChatId) await sendToChat(user.telegramChatId, text);
+  if (user.discordUserId) await sendDiscordDM(user.discordUserId, text);
 }
 
 async function notifyOrderStatus(db, uid, orderId, serviceName, status, refund) {
@@ -261,6 +266,8 @@ async function lockAccount(db, admin, uid) {
     tgKeyHash: admin.firestore.FieldValue.delete(),
     telegramChatId: admin.firestore.FieldValue.delete(),
     telegramLinkedAt: admin.firestore.FieldValue.delete(),
+    discordUserId: admin.firestore.FieldValue.delete(),
+    discordLinkedAt: admin.firestore.FieldValue.delete(),
     securityLockedAt: admin.firestore.FieldValue.serverTimestamp()
   }, { merge: true });
 
@@ -297,7 +304,17 @@ async function handleDeviceCallback(cq, db, admin) {
   return answer('Đã khóa tài khoản');
 }
 
+// Gửi một thông báo tới mọi tài khoản đã liên kết Telegram hoặc Discord
+async function broadcast(db, text) {
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const tg = await db.collection('users').where('telegramChatId', '>', '').get();
+  for (const d of tg.docs) { await sendToChat(d.data().telegramChatId, text); await sleep(60); }
+  const dc = await db.collection('users').where('discordUserId', '>', '').get();
+  for (const d of dc.docs) { await sendDiscordDM(d.data().discordUserId, text); await sleep(200); }
+  return { telegram: tg.size, discord: dc.size };
+}
+
 module.exports = {
-  checkDevice, handleDeviceCallback, pendingView, trustDevice, lockAccount, createLinkKey, getLinkStatus, unlinkAccount, handleCustomerCommand,
+  broadcast, checkDevice, handleDeviceCallback, pendingView, trustDevice, lockAccount, createLinkKey, getLinkStatus, unlinkAccount, handleCustomerCommand,
   notifyUser, notifyOrderStatus, notifyDepositApproved, KEY_RE
 };

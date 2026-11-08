@@ -3,7 +3,7 @@ const { syncOrders } = require('./order-sync');
 const { syncServices } = require('./services');
 const { addAdmin, deleteAdmin, listAdmins, validateEmail, ownerEmail } = require('./admins');
 const { parseThemCode, createVoucher, normalizeCode, CODE_RE } = require('./vouchers');
-const { handleCustomerCommand, notifyDepositApproved, handleDeviceCallback } = require('./telegramLink');
+const { handleCustomerCommand, notifyDepositApproved, handleDeviceCallback, broadcast } = require('./telegramLink');
 
 let started = false;
 let offset = 0;
@@ -314,7 +314,7 @@ async function deletePopup(db,id) {
 }
 
 async function sendHelp(chatId) {
-  return telegram('sendMessage',{chat_id:chatId,text:'<b>TDMS1VN V10 ADMIN BOT</b>\n\n/approve ID_ĐƠN [Số_tiền]\n/reject ID_ĐƠN [Lý_do]\n/pay username số_tiền\n/take username số_tiền\n/themcode CODE % lượt_dùng số_ngày\n/xoacode CODE\n/themtieude ID nội_dung\n/xoatieude ID\n/syncorders\n/syncservices\n/stats\n/addpopup ID | Tiêu đề | Nội dung\n/deletepopup ID\n/addadmin email@gmail.com\n/deleteadmin email@gmail.com\n/listadmin\n/help\n\nVí dụ:\n/approve abc123xyz\n/reject abc123xyz Thẻ sai seri\n/pay hung123 50000',parse_mode:'HTML'});
+  return telegram('sendMessage',{chat_id:chatId,text:'<b>TDMS1VN V10 ADMIN BOT</b>\n\n/approve ID_ĐƠN [Số_tiền]\n/reject ID_ĐƠN [Lý_do]\n/pay username số_tiền\n/take username số_tiền\n/themcode CODE % lượt_dùng số_ngày\n/xoacode CODE\n/themtieude ID nội_dung\n/xoatieude ID\n/thaylinktele URL\n/thaylinkdis URL\n/syncorders\n/syncservices\n/stats\n/addpopup ID | Tiêu đề | Nội dung\n/deletepopup ID\n/addadmin email@gmail.com\n/deleteadmin email@gmail.com\n/listadmin\n/help\n\nVí dụ:\n/approve abc123xyz\n/reject abc123xyz Thẻ sai seri\n/pay hung123 50000',parse_mode:'HTML'});
 }
 
 async function handleMessage(message,db,admin) {
@@ -357,9 +357,25 @@ async function handleMessage(message,db,admin) {
     await ref.delete();
     return telegram('sendMessage',{chat_id:chatId,text:`🗑️ Đã xóa tiêu đề <code>${esc(m[1])}</code>`,parse_mode:'HTML'});
   }
+  if(command==='/thaylinktele'||command==='/thaylinkdis'){
+    const url=String(text.trim().split(/\s+/)[1]||'');
+    if(!/^https:\/\/\S{3,300}$/.test(url)) return telegram('sendMessage',{chat_id:chatId,text:`Cú pháp: ${command} https://...`,parse_mode:'HTML'});
+    const field=command==='/thaylinktele'?'telegramUrl':'discordUrl';
+    await db.collection('config').doc('bot_links').set({[field]:url,updatedAt:admin.firestore.FieldValue.serverTimestamp()},{merge:true});
+    return telegram('sendMessage',{chat_id:chatId,text:`✅ Đã cập nhật link ${field==='telegramUrl'?'bot Telegram':'bot Discord'} trên web.`,parse_mode:'HTML'});
+  }
   if(command==='/themcode'){
     const data=parseThemCode(text);
     const r=await createVoucher(db,admin,data,String(message?.from?.username||message?.from?.id||''));
+    const expText=r.expiresAt.toLocaleDateString('vi-VN',{timeZone:'Asia/Ho_Chi_Minh'});
+    await db.collection('notifications').add({type:'voucher',title:`Mã giảm giá mới: ${r.code}`,body:`Giảm ${r.percent}% · ${r.maxUses} lượt · hết hạn ${expText}. Mỗi tài khoản dùng 1 lần. Lưu trong Kho voucher.`,createdAt:admin.firestore.FieldValue.serverTimestamp()});
+    const sent=await broadcast(db,`🎟️ Mã giảm giá mới: ${r.code}
+📉 Giảm ${r.percent}% cho một đơn hàng
+🔢 ${r.maxUses} lượt, mỗi tài khoản dùng 1 lần
+📅 Hết hạn: ${expText}
+
+Lưu mã trong mục Kho voucher trên web để dùng khi đặt đơn.`);
+    await telegram('sendMessage',{chat_id:chatId,text:`📣 Đã gửi thông báo tới ${sent.telegram} tài khoản Telegram và ${sent.discord} tài khoản Discord.`,parse_mode:'HTML'});
     return telegram('sendMessage',{chat_id:chatId,text:`🎟️ <b>ĐÃ TẠO MÃ GIẢM GIÁ</b>\n\n🔑 Mã: <code>${esc(r.code)}</code>\n📉 Giảm: <b>${r.percent}%</b>\n🔢 Lượt dùng: <b>${r.maxUses}</b>\n📅 Hạn: <b>${r.days} ngày</b> (đến ${esc(r.expiresAt.toLocaleString('vi-VN',{timeZone:'Asia/Ho_Chi_Minh'}))})\n\nMỗi tài khoản chỉ dùng được 1 lần.`,parse_mode:'HTML'});
   }
   if(command==='/approve'){
