@@ -858,6 +858,7 @@ if (require.main === module) {
     }
     
     startAdminBot(db, admin).catch(error => console.error('Admin Telegram bot startup:', error));
+    require('./discordGateway').startDiscordGateway(db, admin);
   });
 }
 
