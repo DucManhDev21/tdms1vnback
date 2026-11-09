@@ -130,11 +130,13 @@ const publicLimiter = rateLimit({
   message: { error: 'Too many requests' }
 });
 
+// Chỉ giới hạn thao tác ghi (POST/PATCH/DELETE), không giới hạn lệnh đọc (GET)
 const mutationLimiter = rateLimit({
   windowMs: 60 * 1000,
   limit: 30,
   standardHeaders: true,
   legacyHeaders: false,
+  skip: req => req.method === 'GET',
   message: { error: 'Too many requests' }
 });
 
@@ -781,6 +783,7 @@ app.get('/api/notifications', verifyToken, async (req, res) => {
         return {
           id: d.id,
           type: x.type || '',
+          code: x.code || '',
           title: x.title || '',
           body: x.body || '',
           createdAt: x.createdAt?.toDate ? x.createdAt.toDate().toISOString() : null

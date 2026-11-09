@@ -44,6 +44,17 @@ async function sendDiscordDM(userId, content) {
   }
 }
 
+const MENU_TEXT_DC = [
+  '**🏪 TDMS1VN · Trợ lý tài khoản**',
+  '💰 **/sodu**: xem số dư hiện tại',
+  '🧾 **/donhang**: 5 đơn gần nhất',
+  '🔍 **/check ma_don**: chi tiết một đơn',
+  '🔗 **/xacthuc key**: liên kết tài khoản',
+  '🚫 **/huyxacthuc**: gỡ liên kết',
+  '',
+  '*Các lệnh chỉ dùng trong tin nhắn riêng với bot.*'
+].join('\n');
+
 async function findUidByDiscord(db, discordId) {
   const snap = await db.collection('users').where('discordUserId', '==', discordId).limit(1).get();
   return snap.empty ? null : snap.docs[0].id;
@@ -56,6 +67,8 @@ async function handleInteraction(body, db, admin) {
 
   const discordId = String(body.member?.user?.id || body.user?.id || '');
   const name = body.data?.name;
+  if (name === 'xacthuc' && body.guild_id) return reply('⚠️ Lệnh này chỉ dùng trong tin nhắn riêng với bot để bảo vệ mã liên kết.');
+  if (name === 'menu') return reply(MENU_TEXT_DC);
   const opt = n => (body.data?.options || []).find(o => o.name === n)?.value;
 
   if (name === 'xacthuc') {
@@ -83,7 +96,7 @@ async function handleInteraction(body, db, admin) {
 
   if (name === 'sodu') {
     const u = (await db.collection('users').doc(uid).get()).data() || {};
-    return reply(`💰 Số dư hiện tại: ${vnd(u.balance)}`);
+    return reply(`**💰 Số dư hiện tại**\n${vnd(u.balance)}`);
   }
   if (name === 'donhang') {
     const snap = await db.collection('orders').where('uid', '==', uid).limit(20).get();
@@ -91,7 +104,7 @@ async function handleInteraction(body, db, admin) {
       .sort((a, b) => toMs(b.createdAt) - toMs(a.createdAt)).slice(0, 5);
     if (!list.length) return reply('Bạn chưa có đơn hàng nào.');
     const lines = list.map(o => `• ${o.id} · ${o.serviceName || 'Dịch vụ'} · SL ${o.quantity || 0} · ${o.status || '—'}`);
-    return reply(`🧾 5 đơn gần nhất:\n${lines.join('\n')}\n\nXem chi tiết: /check ma_don`);
+    return reply(`**🧾 5 đơn gần nhất**\n${lines.join('\n')}\n\nXem chi tiết: /check ma_don`);
   }
   if (name === 'check') {
     const id = String(opt('ma_don') || '').trim();

@@ -1,7 +1,60 @@
 [
-  {"name":"xacthuc","description":"Liên kết tài khoản TDMS1VN","options":[{"type":3,"name":"key","description":"Mã liên kết trên trang Tài khoản","required":true}]},
-  {"name":"sodu","description":"Xem số dư"},
-  {"name":"donhang","description":"Xem 5 đơn gần nhất"},
-  {"name":"check","description":"Xem chi tiết một đơn","options":[{"type":3,"name":"ma_don","description":"Mã đơn","required":true}]},
-  {"name":"huyxacthuc","description":"Gỡ liên kết Discord"}
+  {
+    "name": "menu",
+    "description": "Mở menu trợ lý tài khoản",
+    "contexts": [
+      1
+    ]
+  },
+  {
+    "name": "xacthuc",
+    "description": "Liên kết tài khoản TDMS1VN (chỉ dùng trong tin nhắn riêng)",
+    "contexts": [
+      1
+    ],
+    "options": [
+      {
+        "type": 3,
+        "name": "key",
+        "description": "Mã liên kết trên trang Tài khoản",
+        "required": true
+      }
+    ]
+  },
+  {
+    "name": "sodu",
+    "description": "Xem số dư",
+    "contexts": [
+      1
+    ]
+  },
+  {
+    "name": "donhang",
+    "description": "Xem 5 đơn gần nhất",
+    "contexts": [
+      1
+    ]
+  },
+  {
+    "name": "check",
+    "description": "Xem chi tiết một đơn",
+    "contexts": [
+      1
+    ],
+    "options": [
+      {
+        "type": 3,
+        "name": "ma_don",
+        "description": "Mã đơn",
+        "required": true
+      }
+    ]
+  },
+  {
+    "name": "huyxacthuc",
+    "description": "Gỡ liên kết Discord",
+    "contexts": [
+      1
+    ]
+  }
 ]

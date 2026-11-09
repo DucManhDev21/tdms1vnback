@@ -16,11 +16,13 @@ function api() {
   return axios.create({ baseURL: `https://api.telegram.org/bot${token}`, timeout: 10000 });
 }
 
-async function sendToChat(chatId, text) {
+async function sendToChat(chatId, text, extra = {}) {
   const c = api();
   if (!c || !chatId) return;
-  await c.post('/sendMessage', { chat_id: String(chatId), text }).catch(e => console.error('Telegram send:', e.message));
+  await c.post('/sendMessage', { chat_id: String(chatId), text, ...extra }).catch(e => console.error('Telegram send:', e.message));
 }
+
+function h(s) { return String(s ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])); }
 
 function sha256(v) { return crypto.createHash('sha256').update(v).digest('hex'); }
 
@@ -32,6 +34,24 @@ function toMs(v) {
 }
 
 function vnd(n) { return `${Math.round(Number(n || 0)).toLocaleString('vi-VN')}đ`; }
+
+const MENU_TEXT = '<b>🏪 TDMS1VN · Trợ lý tài khoản</b>\n\n💰 <b>Số dư</b>: xem số dư hiện tại\n🧾 <b>Đơn hàng</b>: 5 đơn gần nhất\n🔍 <b>Tra cứu</b>: <code>/check MÃ_ĐƠN</code>\n🔗 <b>Liên kết</b>: <code>/xacthuc TDMS-XXXX-XXXX-XXXX</code>\n🚫 <b>Gỡ liên kết</b>: <code>/huyxacthuc</code>\n\n<i>Mọi lệnh chỉ dùng trong chat riêng với bot.</i>';
+const HELP_TEXT = '<b>❓ Cách liên kết</b>\n1. Vào trang Tài khoản trên web và lấy mã liên kết.\n2. Gửi <code>/xacthuc MÃ</code> trong chat này.\n3. Bot báo đã liên kết là xong.\n\nSau đó dùng /sodu, /donhang hoặc /check MÃ_ĐƠN.';
+
+// Gửi menu dưới dạng tin nhắn mới, không sửa hay xóa tin cũ
+async function sendMenu(chatId) {
+  const c = api();
+  if (!c) return;
+  await c.post('/sendMessage', {
+    chat_id: String(chatId),
+    text: MENU_TEXT,
+    parse_mode: 'HTML',
+    reply_markup: { inline_keyboard: [
+      [{ text: '💰 Số dư', callback_data: 'cust:sodu' }, { text: '🧾 Đơn hàng', callback_data: 'cust:donhang' }],
+      [{ text: '❓ Hướng dẫn liên kết', callback_data: 'cust:help' }]
+    ] }
+  }).catch(e => console.error('Telegram menu:', e.message));
+}
 
 function randomKey() {
   const part = () => Array.from({ length: 4 }, () => KEY_ALPHABET[crypto.randomInt(KEY_ALPHABET.length)]).join('');
@@ -110,7 +130,7 @@ async function xacthuc(db, admin, chatId, rawKey) {
 }
 
 async function orderLine(o) {
-  return `• ${o.id} · ${o.serviceName || 'Dịch vụ'} · SL ${o.quantity || 0} · ${o.status || '—'}`;
+  return `• <code>${h(o.id)}</code> · ${h(o.serviceName || 'Dịch vụ')} · SL ${h(o.quantity || 0)} · ${h(o.status || '—')}`;
 }
 
 // Trả về true nếu tin nhắn là lệnh của khách (đã xử lý), false nếu không phải.
@@ -119,11 +139,11 @@ async function handleCustomerCommand(message, db, admin) {
   if (!chatId || message?.chat?.type !== 'private') return false;
   const parts = String(message.text || '').trim().split(/\s+/);
   const cmd = (parts[0] || '').split('@')[0].toLowerCase();
-  const CMDS = ['/start', '/xacthuc', '/sodu', '/donhang', '/check', '/huyxacthuc'];
+  const CMDS = ['/start', '/help', '/menu', '/xacthuc', '/sodu', '/donhang', '/check', '/huyxacthuc'];
   if (!CMDS.includes(cmd)) return false;
 
-  if (cmd === '/start') {
-    await sendToChat(chatId, 'Chào bạn đến với TDMS1VN.\nLiên kết: /xacthuc TDMS-XXXX-XXXX-XXXX\nSau khi liên kết: /sodu, /donhang, /check MÃ_ĐƠN, /huyxacthuc');
+  if (cmd === '/start' || cmd === '/help' || cmd === '/menu') {
+    await sendMenu(chatId);
     return true;
   }
   if (cmd === '/xacthuc') { await xacthuc(db, admin, chatId, parts[1]); return true; }
@@ -133,7 +153,7 @@ async function handleCustomerCommand(message, db, admin) {
 
   if (cmd === '/sodu') {
     const u = (await db.collection('users').doc(uid).get()).data() || {};
-    await sendToChat(chatId, `💰 Số dư hiện tại: ${vnd(u.balance)}`);
+    await sendToChat(chatId, `💰 <b>Số dư hiện tại</b>\n<code>${vnd(u.balance)}</code>`, { parse_mode: 'HTML' });
     return true;
   }
   if (cmd === '/donhang') {
@@ -144,7 +164,7 @@ async function handleCustomerCommand(message, db, admin) {
       .slice(0, 5);
     if (!list.length) { await sendToChat(chatId, 'Bạn chưa có đơn hàng nào.'); return true; }
     const lines = await Promise.all(list.map(orderLine));
-    await sendToChat(chatId, `🧾 5 đơn gần nhất:\n${lines.join('\n')}\n\nXem chi tiết: /check MÃ_ĐƠN`);
+    await sendToChat(chatId, `🧾 <b>5 đơn gần nhất</b>\n${lines.join('\n')}\n\nXem chi tiết: <code>/check MÃ_ĐƠN</code>`, { parse_mode: 'HTML' });
     return true;
   }
   if (cmd === '/check') {
@@ -287,6 +307,13 @@ async function lockAccount(db, admin, uid) {
 // Xử lý khi người dùng bấm nút dưới thông báo Telegram
 async function handleDeviceCallback(cq, db, admin) {
   const chatId = String(cq.message?.chat?.id || cq.from?.id || '');
+  if (String(cq.data || '').startsWith('cust:')) {
+    api()?.post('/answerCallbackQuery', { callback_query_id: cq.id }).catch(() => {});
+    if (cq.message?.chat?.type !== 'private') return;
+    const action = String(cq.data).slice(5);
+    if (action === 'help') return sendToChat(chatId, HELP_TEXT, { parse_mode: 'HTML' });
+    return handleCustomerCommand({ chat: { id: chatId, type: 'private' }, text: `/${action}` }, db, admin);
+  }
   const answer = text => api()?.post('/answerCallbackQuery', { callback_query_id: cq.id, text }).catch(() => {});
   const m = String(cq.data || '').match(/^dev:(y|n):([a-f0-9]{16})$/);
   if (!m) return answer('');

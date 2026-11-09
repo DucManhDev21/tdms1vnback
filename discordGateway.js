@@ -1,11 +1,27 @@
-const { Client, GatewayIntentBits, Events } = require('discord.js');
+const { Client, GatewayIntentBits, Events, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const { handleInteraction } = require('./discordBot');
 const COMMANDS = require('./discord-commands.json');
 
 let started = false;
 
+function menuRows() {
+  return [new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('cust:sodu').setLabel('💰 Số dư').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('cust:donhang').setLabel('🧾 Đơn hàng').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('cust:menu').setLabel('❓ Hướng dẫn').setStyle(ButtonStyle.Secondary)
+  )];
+}
+
+function run(db, admin, name, options, userId, guildId) {
+  return handleInteraction({
+    type: 2,
+    user: { id: userId },
+    guild_id: guildId || undefined,
+    data: { name, options }
+  }, db, admin);
+}
+
 // Bot Discord chạy qua Gateway (kết nối liên tục), giống polling của Telegram.
-// Không cần Interactions Endpoint URL, không cần Public Key.
 function startDiscordGateway(db, admin) {
   const token = process.env.DISCORD_BOT_TOKEN;
   if (!token) {
@@ -28,20 +44,24 @@ function startDiscordGateway(db, admin) {
   });
 
   client.on(Events.InteractionCreate, async interaction => {
-    if (!interaction.isChatInputCommand()) return;
     try {
-      const body = {
-        type: 2,
-        user: { id: interaction.user.id },
-        data: {
-          name: interaction.commandName,
-          options: interaction.options.data.map(o => ({ name: o.name, value: o.value }))
-        }
-      };
-      const result = await handleInteraction(body, db, admin);
-      await interaction.reply({ content: result?.data?.content || 'Có lỗi, thử lại sau.', flags: 64 });
+      if (interaction.isChatInputCommand()) {
+        const options = interaction.options.data.map(o => ({ name: o.name, value: o.value }));
+        const result = await run(db, admin, interaction.commandName, options, interaction.user.id, interaction.guildId);
+        const payload = { content: result?.data?.content || 'Có lỗi, thử lại sau.', flags: 64 };
+        if (interaction.commandName === 'menu') payload.components = menuRows();
+        return interaction.reply(payload);
+      }
+      if (interaction.isButton() && interaction.customId.startsWith('cust:')) {
+        const action = interaction.customId.slice(5);
+        const name = action === 'sodu' ? 'sodu' : action === 'donhang' ? 'donhang' : 'menu';
+        const result = await run(db, admin, name, [], interaction.user.id, interaction.guildId);
+        const payload = { content: result?.data?.content || 'Có lỗi, thử lại sau.', flags: 64 };
+        if (name === 'menu') payload.components = menuRows();
+        return interaction.reply(payload);
+      }
     } catch (error) {
-      console.error('Discord command:', error);
+      console.error('Discord interaction:', error);
       if (!interaction.replied && !interaction.deferred) {
         await interaction.reply({ content: 'Có lỗi, thử lại sau.', flags: 64 }).catch(() => {});
       }

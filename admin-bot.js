@@ -368,7 +368,7 @@ async function handleMessage(message,db,admin) {
     const data=parseThemCode(text);
     const r=await createVoucher(db,admin,data,String(message?.from?.username||message?.from?.id||''));
     const expText=r.expiresAt.toLocaleDateString('vi-VN',{timeZone:'Asia/Ho_Chi_Minh'});
-    await db.collection('notifications').add({type:'voucher',title:`Mã giảm giá mới: ${r.code}`,body:`Giảm ${r.percent}% · ${r.maxUses} lượt · hết hạn ${expText}. Mỗi tài khoản dùng 1 lần. Lưu trong Kho voucher.`,createdAt:admin.firestore.FieldValue.serverTimestamp()});
+    await db.collection('notifications').add({type:'voucher',title:`Mã giảm giá mới: ${r.code}`,body:`Giảm ${r.percent}% · ${r.maxUses} lượt · hết hạn ${expText}. Mỗi tài khoản dùng 1 lần. Lưu trong Kho voucher.`,code:r.code,createdAt:admin.firestore.FieldValue.serverTimestamp()});
     const sent=await broadcast(db,`🎟️ Mã giảm giá mới: ${r.code}
 📉 Giảm ${r.percent}% cho một đơn hàng
 🔢 ${r.maxUses} lượt, mỗi tài khoản dùng 1 lần
