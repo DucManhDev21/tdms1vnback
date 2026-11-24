@@ -14,6 +14,7 @@ const servicesModule = require('./services');
 const { getPricingOverrides, parseMarkup, roundMoney } = require('./pricing');
 const depositRouter = require('./deposit');
 const voucherRouter = require('./vouchers').router;
+const keyTasks = require('./keyTasks');
 const { startAdminBot, handleWebhookUpdate } = require('./admin-bot');
 const { ensureOwnerAdmin, isAdmin, listAdmins, addAdmin, deleteAdmin } = require('./admins');
 const { providerConfig, providerServices } = require('./provider');
@@ -51,6 +52,7 @@ app.use(helmet({
 
 const DEFAULT_CORS_ORIGINS = [
   'https://tdms1vip.vercel.app',
+  'https://key-tdms.vercel.app',
   'http://localhost:3000',
   'http://localhost:5173'
 ];
@@ -616,6 +618,7 @@ app.use('/api/orders', orderRouter);
 app.use('/api/cron', cronModule);
 app.use('/api/deposits', depositRouter);
 app.use('/api/vouchers', voucherRouter);
+app.use('/api', keyTasks);
 
 app.post('/api/account/profile', verifyToken, async (req, res) => {
   const uid = req.user.uid;
