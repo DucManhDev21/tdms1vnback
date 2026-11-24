@@ -863,8 +863,12 @@ if (require.main === module) {
       console.error('Admin bootstrap:', error.message);
     }
     
-    startAdminBot(db, admin).catch(error => console.error('Admin Telegram bot startup:', error));
-    require('./discordGateway').startDiscordGateway(db, admin);
+    if (process.env.BOTS_ENABLED !== 'false') {
+      startAdminBot(db, admin).catch(error => console.error('Admin Telegram bot startup:', error));
+      require('./discordGateway').startDiscordGateway(db, admin);
+    } else {
+      console.log('Bot tắt trên service này (BOTS_ENABLED=false). Bot chạy ở service riêng: node bot.js');
+    }
   });
 }
 
