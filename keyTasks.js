@@ -18,7 +18,7 @@ const rnd = n => Array.from({ length: n }, () => ALPHA[crypto.randomInt(ALPHA.le
 const toMs = v => (v && v.toMillis ? v.toMillis() : v && v._seconds != null ? v._seconds * 1000 : new Date(v || 0).getTime());
 const today = () => new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
 const fail = (res, code, msg) => res.status(code).json({ error: msg });
-const keySite = () => process.env.KEY_SITE_URL || 'https://key-tdms.vercel.app';
+const keySite = () => process.env.KEY_SITE_URL || 'https://key-tdms1vn.vercel.app';
 const verifyUser = (req, res, next) => req.app.locals.verifyToken(req, res, next);
 
 // Rút gọn link bằng Link4M (đặt LINK4M_API_KEY trên Railway)
@@ -26,12 +26,8 @@ async function shorten(url) {
   const api = process.env.LINK4M_API_KEY;
   if (!api) throw new Error('Chưa cấu hình LINK4M_API_KEY');
   const { data } = await axios.get('https://link4m.co/api-shorten/v2', { params: { api, url }, timeout: 10000 });
-  const short = data && (data.shortenedUrl || data.short || (data.data && data.data.shortenedUrl));
-  if (!short) {
-    console.error('Link4M response:', JSON.stringify(data).slice(0, 300));
-    throw new Error('Không tạo được link nhiệm vụ');
-  }
-  return short;
+  if (!data || data.status !== 'success' || !data.shortenedUrl) throw new Error('Không tạo được link nhiệm vụ');
+  return data.shortenedUrl;
 }
 
 // 1. Người dùng bấm Lấy key: tạo token và link nhiệm vụ

@@ -52,7 +52,7 @@ app.use(helmet({
 
 const DEFAULT_CORS_ORIGINS = [
   'https://tdms1vip.vercel.app',
-  'https://key-tdms.vercel.app',
+  'https://key-tdms1vn.vercel.app',
   'http://localhost:3000',
   'http://localhost:5173'
 ];
