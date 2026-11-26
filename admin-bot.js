@@ -1,3 +1,4 @@
+const { createGiftcode, disableGiftcode } = require('./giftcode');
 const axios = require('axios');
 const { syncOrders } = require('./order-sync');
 const { syncServices } = require('./services');
@@ -363,6 +364,19 @@ async function handleMessage(message,db,admin) {
     const field=command==='/thaylinktele'?'telegramUrl':'discordUrl';
     await db.collection('config').doc('bot_links').set({[field]:url,updatedAt:admin.firestore.FieldValue.serverTimestamp()},{merge:true});
     return telegram('sendMessage',{chat_id:chatId,text:`✅ Đã cập nhật link ${field==='telegramUrl'?'bot Telegram':'bot Discord'} trên web.`,parse_mode:'HTML'});
+  }
+  if(command==='/giftcode'){
+    try{
+      const p=text.trim().split(/\s+/);
+      const r=await createGiftcode(db,admin,{code:p[1],amount:p[2],uses:p[3],days:p[4]},String(message?.from?.username||message?.from?.id||''));
+      return telegram('sendMessage',{chat_id:chatId,text:`🎁 Đã tạo giftcode <code>${esc(r.code)}</code>\n💰 ${r.amount.toLocaleString('vi-VN')}đ mỗi lượt × ${r.uses} lượt\n🧾 Tổng tối đa: ${r.total.toLocaleString('vi-VN')}đ\n📅 Hết hạn: ${r.expText}\n\nChỉ admin phát riêng cho người dùng. Người dùng nhập mã trong mục Kho voucher trên web.`,parse_mode:'HTML'});
+    }catch(e){ return telegram('sendMessage',{chat_id:chatId,text:`❌ ${esc(e.message)}\nCú pháp: /giftcode CODE số_tiền số_lượt số_ngày\nVí dụ: /giftcode TET2026 10000 2 7`,parse_mode:'HTML'}); }
+  }
+  if(command==='/xoagiftcode'){
+    try{
+      const c=await disableGiftcode(db,admin,text.trim().split(/\s+/)[1]);
+      return telegram('sendMessage',{chat_id:chatId,text:`🗑️ Đã vô hiệu hóa giftcode ${esc(c)}`,parse_mode:'HTML'});
+    }catch(e){ return telegram('sendMessage',{chat_id:chatId,text:`❌ ${esc(e.message)}`,parse_mode:'HTML'}); }
   }
   if(command==='/themcode'){
     const data=parseThemCode(text);

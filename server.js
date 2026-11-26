@@ -15,6 +15,7 @@ const { getPricingOverrides, parseMarkup, roundMoney } = require('./pricing');
 const depositRouter = require('./deposit');
 const voucherRouter = require('./vouchers').router;
 const keyTasks = require('./keyTasks');
+const giftcodeRouter = require('./giftcode').router;
 const { startAdminBot, handleWebhookUpdate } = require('./admin-bot');
 const { ensureOwnerAdmin, isAdmin, listAdmins, addAdmin, deleteAdmin } = require('./admins');
 const { providerConfig, providerServices } = require('./provider');
@@ -619,6 +620,7 @@ app.use('/api/cron', cronModule);
 app.use('/api/deposits', depositRouter);
 app.use('/api/vouchers', voucherRouter);
 app.use('/api', keyTasks);
+app.use('/api/giftcode', giftcodeRouter);
 
 app.post('/api/account/profile', verifyToken, async (req, res) => {
   const uid = req.user.uid;
