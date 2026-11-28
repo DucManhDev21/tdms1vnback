@@ -621,6 +621,9 @@ app.use('/api/deposits', depositRouter);
 app.use('/api/vouchers', voucherRouter);
 app.use('/api', keyTasks);
 app.use('/api/giftcode', giftcodeRouter);
+app.use('/api', require('./cardCallback').router);
+app.use(require('./cardCallback').rootRouter);
+app.use('/api/card', require('./cardCharge').router);
 
 app.post('/api/account/profile', verifyToken, async (req, res) => {
   const uid = req.user.uid;
